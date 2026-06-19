@@ -1,5 +1,5 @@
 build/
 dist/
+tools/
 configs/dev-agent-config.json
 *.log
-

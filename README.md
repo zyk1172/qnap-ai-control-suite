@@ -40,13 +40,22 @@ chmod +x scripts/*.sh qpkg/shared/qnap-ai-control-agent.sh mac-bridge/src/mcp-se
 ./scripts/build_agent.sh
 ```
 
-正式 QPKG 需要 QNAP QDK 的 `qbuild`：
+正式 QPKG 使用 [qnap-dev/QDK](https://github.com/qnap-dev/QDK) 的 `qbuild`。把 QDK 克隆到 `tools/QDK` 后运行：
 
 ```bash
+gh repo clone qnap-dev/QDK tools/QDK
+make -C tools/QDK/src
 ./scripts/package_qpkg.sh amd64
 ```
 
-没有 `qbuild` 时，脚本会生成 staging archive，用来检查包结构，但不是正式可安装 `.qpkg`。
+输出：
+
+```text
+dist/QnapAIControl_0.2.0_x86_64.qpkg
+dist/QnapAIControl_0.2.0_x86_64.qpkg.md5
+```
+
+没有 QDK 时，脚本会生成 staging archive，用来检查包结构，但不是正式可安装 `.qpkg`。
 
 ## MCP 配置
 
@@ -120,4 +129,3 @@ scripts/     构建与打包脚本
 docs/        使用教程、架构文档和图片
 configs/     配置模板
 ```
-
