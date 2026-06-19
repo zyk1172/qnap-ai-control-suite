@@ -31,6 +31,12 @@ if [ "$(uname -s)" = "Darwin" ] && [ -x "$QDK_DIR/bin/qbuild" ]; then
     -e 's#\|[[:space:]]*grep #| /usr/bin/grep #g;' \
     -e 's#/usr/usr/bin/#/usr/bin/#g;' \
     "$ROOT/tools/qdk-macos/bin/qbuild"
+  perl -0pi \
+    -e 's#/usr/bin/tar -cvzf#/usr/bin/tar --no-xattrs --format ustar -cvzf#g;' \
+    -e 's#/usr/bin/tar -cvjf#/usr/bin/tar --no-xattrs --format ustar -cvjf#g;' \
+    -e 's#/usr/bin/tar -cf tmp#/usr/bin/tar --no-xattrs --format ustar -cf tmp#g;' \
+    -e 's#/usr/bin/tar \$tar_verbose -cf#/usr/bin/tar --no-xattrs --format ustar \$tar_verbose -cf#g;' \
+    "$ROOT/tools/qdk-macos/bin/qbuild"
   perl -0pi -e 's#\t/usr/bin/sed -i "s/SCRIPT_LEN/\$script_len/" \$QDK_QPKG_FILE#\t/usr/bin/perl -0pi -e "s/SCRIPT_LEN/\$script_len/" "\$QDK_QPKG_FILE"#g' "$ROOT/tools/qdk-macos/bin/qbuild"
   chmod +x "$ROOT/tools/qdk-macos/bin/qbuild"
 fi
@@ -63,6 +69,10 @@ else
 fi
 chmod +x "$BUILD_DIR/shared/bin/qnap-ai-control-agent" "$BUILD_DIR/shared/qnap-ai-control-agent.sh"
 
+if command -v xattr >/dev/null 2>&1; then
+  xattr -cr "$BUILD_DIR" 2>/dev/null || true
+fi
+
 cat > "$BUILD_DIR/qdk.conf" <<EOF
 QDK_VERSION=2.5.2
 QDK_PATH="$QDK_DIR"
@@ -70,7 +80,7 @@ EOF
 
 if [ -n "$QBUILD_BIN" ]; then
   cd "$BUILD_DIR"
-  PATH="$ROOT/tools/QDK/src/bin:$QDK_DIR/bin:$PATH" QDK_PATH="$BUILD_DIR/no-qdk-conf-here" "$QBUILD_BIN" --build-arch x86_64 --build-dir "$ROOT/dist"
+  COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 PATH="$ROOT/tools/QDK/src/bin:$QDK_DIR/bin:$PATH" QDK_PATH="$BUILD_DIR/no-qdk-conf-here" "$QBUILD_BIN" --build-arch x86_64 --build-dir "$ROOT/dist"
   find "$ROOT/dist" -maxdepth 1 -name "*.qpkg" -print
 else
   tar -C "$BUILD_DIR" -czf "$ROOT/dist/QnapAIControl-0.2.0-linux-$ARCH.qpkg-staging.tar.gz" .
