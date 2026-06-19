@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ARCH="${1:-amd64}"
+QPKG_ARCH="${QPKG_ARCH:-generic}"
 BUILD_DIR="$ROOT/build/qpkg"
 QDK_DIR="${QDK_DIR:-$ROOT/tools/QDK/shared}"
 QBUILD_BIN="${QBUILD_BIN:-}"
@@ -80,7 +81,11 @@ EOF
 
 if [ -n "$QBUILD_BIN" ]; then
   cd "$BUILD_DIR"
-  COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 PATH="$ROOT/tools/QDK/src/bin:$QDK_DIR/bin:$PATH" QDK_PATH="$BUILD_DIR/no-qdk-conf-here" "$QBUILD_BIN" --build-arch x86_64 --build-dir "$ROOT/dist"
+  if [ "$QPKG_ARCH" = "generic" ]; then
+    COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 PATH="$ROOT/tools/QDK/src/bin:$QDK_DIR/bin:$PATH" QDK_PATH="$BUILD_DIR/no-qdk-conf-here" "$QBUILD_BIN" --build-dir "$ROOT/dist"
+  else
+    COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 PATH="$ROOT/tools/QDK/src/bin:$QDK_DIR/bin:$PATH" QDK_PATH="$BUILD_DIR/no-qdk-conf-here" "$QBUILD_BIN" --build-arch "$QPKG_ARCH" --build-dir "$ROOT/dist"
+  fi
   find "$ROOT/dist" -maxdepth 1 -name "*.qpkg" -print
 else
   tar -C "$BUILD_DIR" -czf "$ROOT/dist/QnapAIControl-0.2.0-linux-$ARCH.qpkg-staging.tar.gz" .
