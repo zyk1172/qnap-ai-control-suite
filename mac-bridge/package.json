@@ -1,0 +1,15 @@
+{
+  "name": "qnap-ai-control-mcp",
+  "version": "0.2.0",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "qnap-ai-control-mcp": "./src/mcp-server.js"
+  },
+  "scripts": {
+    "start": "node src/mcp-server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "listen": "0.0.0.0:8756",
+  "token_sha256": "REPLACE_WITH_SHA256_OF_YOUR_TOKEN",
+  "allowed_roots": [
+    "/share"
+  ],
+  "allowed_commands": [
+    "/bin/df",
+    "/bin/ps",
+    "/bin/uname",
+    "/sbin/getcfg",
+    "/sbin/ifconfig",
+    "/sbin/qpkg_cli",
+    "/usr/bin/uptime"
+  ],
+  "allow_shell": false,
+  "audit_log": "/var/log/qnap-ai-control-agent/audit.jsonl",
+  "max_read_bytes": 2097152,
+  "command_timeout_seconds": 30
+}

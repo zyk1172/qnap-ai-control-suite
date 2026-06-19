@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="460" viewBox="0 0 1200 460" role="img" aria-labelledby="title desc">
+  <title id="title">Sensitive operation confirmation flow</title>
+  <desc id="desc">Sensitive MCP calls create a pending operation, then the user reviews the summary and confirms execution with a phrase.</desc>
+  <defs>
+    <style>
+      .bg { fill: #fbfbfc; }
+      .step { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; rx: 8; }
+      .confirm { fill: #fff7ed; stroke: #f97316; stroke-width: 2; rx: 8; }
+      .done { fill: #ecfdf5; stroke: #10b981; stroke-width: 2; rx: 8; }
+      .title { font: 700 24px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #17202a; }
+      .label { font: 700 18px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #243447; }
+      .small { font: 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .mono { font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #334155; }
+      .arrow { stroke: #2563eb; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+    </marker>
+  </defs>
+  <rect class="bg" width="1200" height="460"/>
+  <text class="title" x="52" y="58">Sensitive operation confirmation</text>
+  <text class="small" x="52" y="84">File writes, command runs, and QPKG actions are two-step by default.</text>
+
+  <rect class="step" x="60" y="145" width="235" height="150"/>
+  <text class="label" x="88" y="183">1. Request</text>
+  <text class="small" x="88" y="220">AI calls a sensitive tool</text>
+  <text class="mono" x="88" y="248">nas_qpkg_action</text>
+
+  <rect class="confirm" x="365" y="145" width="260" height="150"/>
+  <text class="label" x="393" y="183">2. Prepare</text>
+  <text class="small" x="393" y="220">Agent validates allowlists</text>
+  <text class="small" x="393" y="248">Creates pending operation</text>
+  <text class="mono" x="393" y="276">CONFIRM &lt;id&gt;</text>
+
+  <rect class="confirm" x="700" y="145" width="235" height="150"/>
+  <text class="label" x="728" y="183">3. Review</text>
+  <text class="small" x="728" y="220">User checks summary</text>
+  <text class="small" x="728" y="248">Operation expires in 10 min</text>
+
+  <rect class="done" x="1000" y="145" width="150" height="150"/>
+  <text class="label" x="1028" y="183">4. Execute</text>
+  <text class="small" x="1028" y="220">Confirm phrase</text>
+  <text class="small" x="1028" y="248">Audit log</text>
+
+  <path class="arrow" d="M 295 220 C 325 220 335 220 365 220"/>
+  <path class="arrow" d="M 625 220 C 660 220 668 220 700 220"/>
+  <path class="arrow" d="M 935 220 C 962 220 972 220 1000 220"/>
+
+  <rect class="step" x="185" y="348" width="830" height="46"/>
+  <text class="small" x="215" y="377">Dry-run remains available for safe planning: set dry_run=true to validate the command shape without creating a pending operation.</text>
+</svg>
+

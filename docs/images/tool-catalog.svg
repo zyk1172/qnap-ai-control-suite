@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="560" viewBox="0 0 1200 560" role="img" aria-labelledby="title desc">
+  <title id="title">MCP tool catalog</title>
+  <desc id="desc">Read-only and sensitive MCP tools exposed by QNAP AI Control Suite.</desc>
+  <defs>
+    <style>
+      .bg { fill: #f8fafc; }
+      .card { fill: #ffffff; stroke: #d4dae2; stroke-width: 2; rx: 8; }
+      .safe { fill: #ecfdf5; stroke: #10b981; stroke-width: 2; rx: 8; }
+      .risk { fill: #fff7ed; stroke: #f97316; stroke-width: 2; rx: 8; }
+      .title { font: 700 24px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #17202a; }
+      .label { font: 700 19px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #243447; }
+      .small { font: 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .mono { font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #334155; }
+    </style>
+  </defs>
+  <rect class="bg" width="1200" height="560"/>
+  <text class="title" x="52" y="58">MCP tool catalog</text>
+  <text class="small" x="52" y="84">Read-only tools execute immediately. Sensitive tools prepare first and require confirmation.</text>
+
+  <rect class="safe" x="70" y="125" width="480" height="365"/>
+  <text class="label" x="100" y="164">Read-only tools</text>
+  <text class="mono" x="100" y="206">nas_health</text>
+  <text class="mono" x="100" y="236">nas_capabilities</text>
+  <text class="mono" x="100" y="266">nas_system_overview</text>
+  <text class="mono" x="100" y="296">nas_processes</text>
+  <text class="mono" x="100" y="326">nas_audit_tail</text>
+  <text class="mono" x="100" y="356">nas_file_list / stat / read</text>
+  <text class="mono" x="100" y="386">nas_qpkg_list</text>
+  <text class="mono" x="100" y="416">nas_qnap_getcfg</text>
+  <text class="mono" x="100" y="446">nas_pending_operations</text>
+
+  <rect class="risk" x="650" y="125" width="480" height="365"/>
+  <text class="label" x="680" y="164">Sensitive tools</text>
+  <text class="mono" x="680" y="212">nas_file_write</text>
+  <text class="small" x="860" y="212">write under allowed roots</text>
+  <text class="mono" x="680" y="262">nas_command_run</text>
+  <text class="small" x="860" y="262">allowlisted command only</text>
+  <text class="mono" x="680" y="312">nas_qpkg_action</text>
+  <text class="small" x="860" y="312">start / stop / restart</text>
+  <text class="mono" x="680" y="362">nas_prepare_operation</text>
+  <text class="small" x="860" y="362">manual prepare path</text>
+  <text class="mono" x="680" y="412">nas_confirm_operation</text>
+  <text class="small" x="860" y="412">execute after review</text>
+</svg>
+
