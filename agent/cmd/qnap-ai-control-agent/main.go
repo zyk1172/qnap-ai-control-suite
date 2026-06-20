@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net/http"
@@ -154,6 +155,7 @@ func main() {
 	s := &Server{cfg: cfg, pending: map[string]PendingOperation{}, started: time.Now(), hostname: hostname}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/v1/health", s.withAuth(s.handleHealth))
 	mux.HandleFunc("/v1/capabilities", s.withAuth(s.handleCapabilities))
 	mux.HandleFunc("/v1/system/overview", s.withAuth(s.handleSystemOverview))
@@ -209,6 +211,53 @@ func loadConfig(path string) (Config, error) {
 	cfg.AllowedRoots = cleanPathList(cfg.AllowedRoots)
 	cfg.AllowedCommands = cleanPathList(cfg.AllowedCommands)
 	return cfg, nil
+}
+
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		writeError(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if r.Method == http.MethodHead {
+		return
+	}
+	fmt.Fprintf(w, `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QNAP AI Control</title>
+  <style>
+    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#101820;color:#f5f7fb}
+    main{max-width:760px;margin:0 auto;padding:48px 24px}
+    .panel{border:1px solid #314357;background:#172331;border-radius:8px;padding:28px}
+    h1{margin:0 0 12px;font-size:28px;font-weight:650}
+    p{line-height:1.55;color:#c8d3df}
+    code{background:#0b1118;border:1px solid #2b3b4d;border-radius:5px;padding:2px 6px;color:#b7f7d4}
+    .status{display:inline-block;margin:10px 0 18px;padding:6px 10px;border-radius:999px;background:#123b2b;color:#74f0a7;font-weight:650}
+    ul{padding-left:20px;color:#c8d3df}
+  </style>
+</head>
+<body>
+  <main>
+    <section class="panel">
+      <h1>QNAP AI Control</h1>
+      <div class="status">Running on %s</div>
+      <p>This NAS control agent is installed and listening on <code>%s</code>.</p>
+      <ul>
+        <li>API health endpoint: <code>/v1/health</code></li>
+        <li>API requests require <code>Authorization: Bearer &lt;token&gt;</code>.</li>
+        <li>Initial token file: <code>/etc/config/qnap-ai-control-agent/initial-token.txt</code></li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>`, html.EscapeString(s.hostname), html.EscapeString(s.cfg.Listen))
 }
 
 func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
