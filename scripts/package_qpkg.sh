@@ -38,6 +38,11 @@ if [ "$(uname -s)" = "Darwin" ] && [ -x "$QDK_DIR/bin/qbuild" ]; then
     -e 's#/usr/bin/tar -cf tmp#/usr/bin/tar --no-xattrs --format ustar -cf tmp#g;' \
     -e 's#/usr/bin/tar \$tar_verbose -cf#/usr/bin/tar --no-xattrs --format ustar \$tar_verbose -cf#g;' \
     "$ROOT/tools/qdk-macos/bin/qbuild"
+  # Keep NAS-side bootstrap paths intact. QNAP has /bin/grep but not
+  # /usr/bin/grep on TS-264C/QTS, while macOS needs /usr/bin/grep for qbuild.
+  perl -0pi \
+    -e 's#/usr/bin/grep "/mnt/HDA_ROOT"#/bin/grep "/mnt/HDA_ROOT"#g;' \
+    "$ROOT/tools/qdk-macos/bin/qbuild"
   perl -0pi -e 's#\t/usr/bin/sed -i "s/SCRIPT_LEN/\$script_len/" \$QDK_QPKG_FILE#\t/usr/bin/perl -0pi -e "s/SCRIPT_LEN/\$script_len/" "\$QDK_QPKG_FILE"#g' "$ROOT/tools/qdk-macos/bin/qbuild"
   chmod +x "$ROOT/tools/qdk-macos/bin/qbuild"
 fi
