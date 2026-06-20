@@ -16,9 +16,10 @@ QNAP AI Control Suite 是一个 NAS 端控制代理加 Mac 端 MCP 桥接器。
 
 ## 功能
 
-当前 `0.2.0` 版本包含：
+当前 `0.2.5` 版本包含：
 
 - NAS 健康检查和能力清单
+- WebUI token 保存、连接测试、能力读取和 MCP 配置生成
 - 系统概览、磁盘、进程列表
 - `/share` 目录下文件列表、stat、读取、写入
 - QPKG 套件列表、start、stop、restart
@@ -51,13 +52,21 @@ make -C tools/QDK/src
 输出：
 
 ```text
-dist/QnapAIControl_0.2.0_x86_64.qpkg
-dist/QnapAIControl_0.2.0_x86_64.qpkg.md5
+dist/QnapAIControl_0.2.5.qpkg
+dist/QnapAIControl_0.2.5.qpkg.md5
 ```
 
 没有 QDK 时，脚本会生成 staging archive，用来检查包结构，但不是正式可安装 `.qpkg`。
 
 ## MCP 配置
+
+也可以直接打开 WebUI：
+
+```text
+http://NAS_IP:8756/
+```
+
+在 WebUI 中粘贴 token，点击测试连接，然后复制 MCP 配置。
 
 Mac 端 MCP server 命令：
 
@@ -104,6 +113,7 @@ QACS_TOKEN=从 NAS /etc/config/qnap-ai-control-agent/initial-token.txt 读取
 ## 文档
 
 - [安装和部署](docs/install.md)
+- [WebUI 使用教程](docs/webui.md)
 - [MCP 客户端配置](docs/mcp-clients.md)
 - [敏感操作确认机制](docs/confirmations.md)
 - [QPKG 构建说明](docs/qpkg-build.md)

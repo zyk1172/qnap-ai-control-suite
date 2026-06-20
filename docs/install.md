@@ -32,7 +32,7 @@ dist/linux-amd64/qnap-ai-control-agent
 如果没有 `qbuild`，脚本只会生成：
 
 ```text
-dist/QnapAIControl-0.2.0-linux-amd64.qpkg-staging.tar.gz
+dist/QnapAIControl-0.2.5-linux-amd64.qpkg-staging.tar.gz
 ```
 
 这只是检查包结构用的 staging 包，不能当正式 QPKG 安装。
@@ -43,7 +43,7 @@ dist/QnapAIControl-0.2.0-linux-amd64.qpkg-staging.tar.gz
 
 1. 打开 QNAP App Center。
 2. 选择手动安装。
-3. 上传 `QnapAIControl_0.2.0_*.qpkg`。
+3. 上传 `QnapAIControl_0.2.5.qpkg`。
 4. 启动 `QNAP AI Control` 套件。
 
 首次启动会生成：
@@ -54,7 +54,19 @@ dist/QnapAIControl-0.2.0-linux-amd64.qpkg-staging.tar.gz
 /var/log/qnap-ai-control-agent/audit.jsonl
 ```
 
-## 4. Mac 端连接
+## 4. WebUI 设置 token
+
+打开：
+
+```text
+http://NAS_IP:8756/
+```
+
+把 token 粘贴到 WebUI 左侧输入框，点击 `保存到浏览器`，再点击 `测试连接`。
+
+WebUI 只把 token 保存到当前浏览器 `localStorage`，不会写回 NAS 配置。
+
+## 5. Mac 端连接
 
 从 NAS 读取 token：
 
@@ -74,4 +86,3 @@ export QACS_TOKEN='上一步读取的 token'
 ```bash
 curl -H "Authorization: Bearer $QACS_TOKEN" "$QACS_BASE_URL/v1/health"
 ```
-
