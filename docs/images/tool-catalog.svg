@@ -27,7 +27,8 @@
   <text class="mono" x="100" y="356">nas_file_list / stat / read</text>
   <text class="mono" x="100" y="386">nas_qpkg_list</text>
   <text class="mono" x="100" y="416">nas_qnap_getcfg</text>
-  <text class="mono" x="100" y="446">nas_pending_operations</text>
+  <text class="mono" x="100" y="446">nas_docker_info / containers / images</text>
+  <text class="mono" x="100" y="476">nas_docker_inspect / logs</text>
 
   <rect class="risk" x="650" y="125" width="480" height="365"/>
   <text class="label" x="680" y="164">Sensitive tools</text>
@@ -37,9 +38,10 @@
   <text class="small" x="860" y="262">allowlisted command only</text>
   <text class="mono" x="680" y="312">nas_qpkg_action</text>
   <text class="small" x="860" y="312">start / stop / restart</text>
-  <text class="mono" x="680" y="362">nas_prepare_operation</text>
-  <text class="small" x="860" y="362">manual prepare path</text>
-  <text class="mono" x="680" y="412">nas_confirm_operation</text>
-  <text class="small" x="860" y="412">execute after review</text>
+  <text class="mono" x="680" y="362">nas_docker_action</text>
+  <text class="small" x="860" y="362">container start / stop / restart</text>
+  <text class="mono" x="680" y="412">nas_prepare_operation</text>
+  <text class="small" x="860" y="412">manual prepare path</text>
+  <text class="mono" x="680" y="462">nas_confirm_operation</text>
+  <text class="small" x="860" y="462">execute after review</text>
 </svg>
-

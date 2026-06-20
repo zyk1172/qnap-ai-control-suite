@@ -54,6 +54,7 @@ Authorization: Bearer <token>
 
 - 允许访问的根目录
 - 允许执行的命令
+- Container Station / Docker CLI 查找路径
 - 是否允许 shell
 - 敏感操作列表
 - 确认操作超时时间
@@ -88,6 +89,8 @@ QACS_TOKEN=<token>
 }
 ```
 
+把这段配置加入对应 agent 的 MCP server 列表后，重载 agent。重载后用 `nas_health` 测试连接，再用 `nas_docker_containers` 确认容器管理工具已经出现。
+
 ## 5. 敏感操作确认
 
 WebUI 的 `3. 确认敏感操作` 标签页展示确认流程。
@@ -97,6 +100,7 @@ WebUI 的 `3. 确认敏感操作` 标签页展示确认流程。
 - 写文件
 - 执行 allowlist 命令
 - 启动、停止、重启 QPKG
+- 启动、停止、重启、暂停、恢复 Docker 容器
 
 流程是：
 

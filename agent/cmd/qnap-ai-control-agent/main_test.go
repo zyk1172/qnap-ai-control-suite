@@ -48,3 +48,30 @@ func TestCommandAllowList(t *testing.T) {
 		t.Fatal("expected non-allowlisted command to be rejected")
 	}
 }
+
+func TestDockerNameValidation(t *testing.T) {
+	valid := []string{"moviepilot", "abc123", "container.name", "sha256:abcd", "name_1-2"}
+	for _, name := range valid {
+		if err := validateDockerName(name); err != nil {
+			t.Fatalf("validateDockerName(%q) returned error: %v", name, err)
+		}
+	}
+	invalid := []string{"", "movie pilot", "moviepilot;reboot", "$(id)", "a/b"}
+	for _, name := range invalid {
+		if err := validateDockerName(name); err == nil {
+			t.Fatalf("validateDockerName(%q) succeeded, want error", name)
+		}
+	}
+}
+
+func TestDockerTailBounds(t *testing.T) {
+	if got := normalizedDockerTail(0); got != 200 {
+		t.Fatalf("default tail = %d, want 200", got)
+	}
+	if got := normalizedDockerTail(3000); got != 2000 {
+		t.Fatalf("capped tail = %d, want 2000", got)
+	}
+	if got := normalizedDockerTail(42); got != 42 {
+		t.Fatalf("tail = %d, want 42", got)
+	}
+}

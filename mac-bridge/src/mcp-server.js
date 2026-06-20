@@ -47,13 +47,29 @@ const tools = [
     dry_run: { type: "boolean" },
     reason: { type: "string" }
   }, ["name", "action"]),
+  tool("nas_docker_info", "Read QNAP Container Station / Docker engine version and runtime information."),
+  tool("nas_docker_containers", "List Docker containers through Container Station / docker ps -a."),
+  tool("nas_docker_images", "List Docker images through Container Station / docker images."),
+  tool("nas_docker_inspect", "Inspect one Docker container or image by name or id.", {
+    name: { type: "string", description: "Container/image name or id." }
+  }, ["name"]),
+  tool("nas_docker_logs", "Read recent Docker container logs with a bounded tail.", {
+    name: { type: "string", description: "Container name or id." },
+    tail: { type: "number", description: "Number of lines, default 200, max 2000." }
+  }, ["name"]),
+  tool("nas_docker_action", "Prepare or dry-run start, stop, restart, pause, or unpause for a Docker container. Non-dry-run actions require confirmation.", {
+    name: { type: "string", description: "Container name or id." },
+    action: { type: "string", enum: ["start", "stop", "restart", "pause", "unpause"] },
+    dry_run: { type: "boolean" },
+    reason: { type: "string" }
+  }, ["name", "action"]),
   tool("nas_qnap_getcfg", "Read a QNAP config value with getcfg. File is limited to /etc/config/*.conf.", {
     section: { type: "string" },
     key: { type: "string" },
     file: { type: "string", description: "Defaults to /etc/config/qpkg.conf." }
   }, ["section", "key"]),
-  tool("nas_prepare_operation", "Prepare a sensitive operation manually. Use for file_write, command_run, or qpkg_action.", {
-    operation: { type: "string", enum: ["file_write", "command_run", "qpkg_action"] },
+  tool("nas_prepare_operation", "Prepare a sensitive operation manually. Use for file_write, command_run, qpkg_action, or docker_action.", {
+    operation: { type: "string", enum: ["file_write", "command_run", "qpkg_action", "docker_action"] },
     arguments: { type: "object" },
     reason: { type: "string" }
   }, ["operation", "arguments"]),
@@ -89,7 +105,7 @@ async function handleMessage(msg) {
       return {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "qnap-ai-control-mcp", version: "0.2.0" }
+        serverInfo: { name: "qnap-ai-control-mcp", version: "0.2.6" }
       };
     case "notifications/initialized":
       return {};
@@ -160,6 +176,30 @@ async function callTool(name, args) {
       };
       if (payload.dry_run) return textResult(await request("POST", "/v1/qnap/qpkg/action", payload));
       return preparedResult(await prepare("qpkg_action", payload, args.reason));
+    }
+    case "nas_docker_info":
+      return textResult(await request("GET", "/v1/docker/info"));
+    case "nas_docker_containers":
+      return textResult(await request("GET", "/v1/docker/containers"));
+    case "nas_docker_images":
+      return textResult(await request("GET", "/v1/docker/images"));
+    case "nas_docker_inspect":
+      return textResult(await request("POST", "/v1/docker/inspect", {
+        name: args.name
+      }));
+    case "nas_docker_logs":
+      return textResult(await request("POST", "/v1/docker/logs", {
+        name: args.name,
+        tail: args.tail
+      }));
+    case "nas_docker_action": {
+      const payload = {
+        name: args.name,
+        action: args.action,
+        dry_run: Boolean(args.dry_run)
+      };
+      if (payload.dry_run) return textResult(await request("POST", "/v1/docker/action", payload));
+      return preparedResult(await prepare("docker_action", payload, args.reason));
     }
     case "nas_qnap_getcfg":
       return textResult(await request("POST", "/v1/qnap/getcfg", {
@@ -255,4 +295,3 @@ function write(obj) {
 process.on("uncaughtException", (error) => {
   stderr.write(`${error.stack || error.message}\n`);
 });
-

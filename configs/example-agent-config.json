@@ -13,6 +13,15 @@
     "/sbin/qpkg_cli",
     "/usr/bin/uptime"
   ],
+  "docker_paths": [
+    "/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker",
+    "/share/CACHEDEV1_DATA/.qpkg/container-station/usr/bin/docker",
+    "/share/CACHEDEV5_DATA/.qpkg/container-station/bin/docker",
+    "/share/CACHEDEV5_DATA/.qpkg/container-station/usr/bin/docker",
+    "/usr/bin/docker",
+    "/usr/local/bin/docker",
+    "/bin/docker"
+  ],
   "allow_shell": false,
   "audit_log": "/var/log/qnap-ai-control-agent/audit.jsonl",
   "max_read_bytes": 2097152,

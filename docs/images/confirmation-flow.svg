@@ -19,12 +19,12 @@
   </defs>
   <rect class="bg" width="1200" height="460"/>
   <text class="title" x="52" y="58">Sensitive operation confirmation</text>
-  <text class="small" x="52" y="84">File writes, command runs, and QPKG actions are two-step by default.</text>
+  <text class="small" x="52" y="84">File writes, command runs, QPKG actions, and Docker container actions are two-step by default.</text>
 
   <rect class="step" x="60" y="145" width="235" height="150"/>
   <text class="label" x="88" y="183">1. Request</text>
   <text class="small" x="88" y="220">AI calls a sensitive tool</text>
-  <text class="mono" x="88" y="248">nas_qpkg_action</text>
+  <text class="mono" x="88" y="248">nas_qpkg_action / nas_docker_action</text>
 
   <rect class="confirm" x="365" y="145" width="260" height="150"/>
   <text class="label" x="393" y="183">2. Prepare</text>
@@ -49,4 +49,3 @@
   <rect class="step" x="185" y="348" width="830" height="46"/>
   <text class="small" x="215" y="377">Dry-run remains available for safe planning: set dry_run=true to validate the command shape without creating a pending operation.</text>
 </svg>
-

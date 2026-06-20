@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
+  <title id="title">Container Station Docker management flow</title>
+  <desc id="desc">How MCP agents use QNAP AI Control Suite to read Docker state and prepare confirmed container actions.</desc>
+  <defs>
+    <style>
+      .bg { fill: #f8fafc; }
+      .panel { fill: #ffffff; stroke: #d4dae2; stroke-width: 2; rx: 8; }
+      .safe { fill: #ecfdf5; stroke: #10b981; stroke-width: 2; rx: 8; }
+      .risk { fill: #fff7ed; stroke: #f97316; stroke-width: 2; rx: 8; }
+      .title { font: 700 25px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #17202a; }
+      .label { font: 700 19px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #243447; }
+      .small { font: 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .mono { font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #334155; }
+      .arrow { stroke: #2563eb; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+    </style>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#2563eb"/>
+    </marker>
+  </defs>
+  <rect class="bg" width="1200" height="620"/>
+  <text class="title" x="52" y="58">Container Station / Docker management</text>
+  <text class="small" x="52" y="86">Read-only inventory runs immediately. Container actions are prepared first and require a confirmation phrase.</text>
+
+  <rect class="panel" x="60" y="140" width="245" height="115"/>
+  <text class="label" x="92" y="182">Mac agent</text>
+  <text class="small" x="92" y="210">Codex / OpenClaw / Hermes</text>
+
+  <rect class="panel" x="380" y="140" width="245" height="115"/>
+  <text class="label" x="412" y="182">MCP bridge</text>
+  <text class="small" x="412" y="210">stdio tools to NAS API</text>
+
+  <rect class="panel" x="700" y="140" width="245" height="115"/>
+  <text class="label" x="732" y="182">NAS agent</text>
+  <text class="small" x="732" y="210">token, audit, confirmation</text>
+
+  <rect class="panel" x="1010" y="140" width="130" height="115"/>
+  <text class="label" x="1035" y="182">Docker</text>
+  <text class="small" x="1030" y="210">Container Station</text>
+
+  <path class="arrow" d="M306 198 H374"/>
+  <path class="arrow" d="M626 198 H694"/>
+  <path class="arrow" d="M946 198 H1004"/>
+
+  <rect class="safe" x="80" y="335" width="455" height="205"/>
+  <text class="label" x="110" y="374">Read-only tools</text>
+  <text class="mono" x="110" y="414">nas_docker_info</text>
+  <text class="small" x="310" y="414">engine version and runtime state</text>
+  <text class="mono" x="110" y="452">nas_docker_containers</text>
+  <text class="small" x="310" y="452">container inventory</text>
+  <text class="mono" x="110" y="490">nas_docker_images</text>
+  <text class="small" x="310" y="490">image inventory</text>
+  <text class="mono" x="110" y="528">nas_docker_inspect / logs</text>
+  <text class="small" x="310" y="528">bounded diagnostics</text>
+
+  <rect class="risk" x="665" y="335" width="455" height="205"/>
+  <text class="label" x="695" y="374">Sensitive tool</text>
+  <text class="mono" x="695" y="420">nas_docker_action</text>
+  <text class="small" x="895" y="420">start / stop / restart / pause / unpause</text>
+  <text class="mono" x="695" y="470">prepare -> review -> confirm</text>
+  <text class="small" x="895" y="470">10 minute in-memory pending operation</text>
+  <text class="mono" x="695" y="520">audit.jsonl</text>
+  <text class="small" x="895" y="520">records prepare and confirm</text>
+</svg>

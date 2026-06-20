@@ -9,6 +9,7 @@ flowchart LR
   HTTP --> Agent["QNAP AI Control Agent"]
   Agent --> Files["/share files"]
   Agent --> QPKG["qpkg_cli"]
+  Agent --> Docker["Container Station / Docker CLI"]
   Agent --> Cmd["allowlisted commands"]
   Agent --> Audit["audit.jsonl"]
 ```
@@ -28,6 +29,7 @@ The first version has one restricted profile:
 
 - `allowed_roots`: file paths that may be listed, read, or written.
 - `allowed_commands`: exact executable paths that may be run.
+- `docker_paths`: exact Docker CLI candidates used for Container Station integration.
 - `allow_shell`: disabled by default. Keep it disabled unless the NAS is isolated and the command caller is trusted.
 
 Future profiles should be explicit:
@@ -53,6 +55,12 @@ Current endpoints:
 - `GET /v1/qnap/qpkg`
 - `POST /v1/qnap/qpkg/action`
 - `POST /v1/qnap/getcfg`
+- `GET /v1/docker/info`
+- `GET /v1/docker/containers`
+- `GET /v1/docker/images`
+- `POST /v1/docker/inspect`
+- `POST /v1/docker/logs`
+- `POST /v1/docker/action`
 - `POST /v1/operations/prepare`
 - `POST /v1/operations/confirm`
 - `GET /v1/operations/pending`

@@ -12,6 +12,7 @@ NAS 控制面可以影响下载器、媒体库、容器、套件和共享文件�
 - 写文件：`file_write`
 - 执行 allowlist 命令：`command_run`
 - QPKG 启停重启：`qpkg_action`
+- Docker 容器启停、重启、暂停、恢复：`docker_action`
 
 ## 默认行为
 
@@ -22,6 +23,16 @@ NAS 控制面可以影响下载器、媒体库、容器、套件和共享文件�
   "name": "MoviePilot",
   "action": "restart",
   "reason": "应用配置后重启"
+}
+```
+
+Docker 容器动作同理。调用 `nas_docker_action` 且 `dry_run: false` 只会创建 `docker_action` 待确认操作：
+
+```json
+{
+  "name": "moviepilot",
+  "action": "restart",
+  "reason": "应用配置后重启容器"
 }
 ```
 
@@ -64,4 +75,3 @@ NAS 控制面可以影响下载器、媒体库、容器、套件和共享文件�
 - 确认前阅读 `summary` 和 `reason`。
 - 对文件写入先读原文件，再写入，再读回验证。
 - 不要把 `/bin/sh`、`/bin/bash`、`rm` 加入默认 allowlist。
-

@@ -16,13 +16,14 @@ QNAP AI Control Suite 是一个 NAS 端控制代理加 Mac 端 MCP 桥接器。
 
 ## 功能
 
-当前 `0.2.5` 版本包含：
+当前 `0.2.6` 版本包含：
 
 - NAS 健康检查和能力清单
 - WebUI token 保存、连接测试、能力读取和 MCP 配置生成
 - 系统概览、磁盘、进程列表
 - `/share` 目录下文件列表、stat、读取、写入
 - QPKG 套件列表、start、stop、restart
+- Container Station / Docker：engine info、容器列表、镜像列表、inspect、logs、start、stop、restart、pause、unpause
 - QNAP `getcfg` 配置读取，限制在 `/etc/config/*.conf`
 - allowlist 命令执行，不经过 shell
 - JSONL 审计日志
@@ -52,8 +53,8 @@ make -C tools/QDK/src
 输出：
 
 ```text
-dist/QnapAIControl_0.2.5.qpkg
-dist/QnapAIControl_0.2.5.qpkg.md5
+dist/QnapAIControl_0.2.6.qpkg
+dist/QnapAIControl_0.2.6.qpkg.md5
 ```
 
 没有 QDK 时，脚本会生成 staging archive，用来检查包结构，但不是正式可安装 `.qpkg`。
@@ -83,7 +84,7 @@ QACS_TOKEN=从 NAS /etc/config/qnap-ai-control-agent/initial-token.txt 读取
 
 ## 敏感操作确认
 
-非 dry-run 的 `nas_file_write`、`nas_command_run`、`nas_qpkg_action` 不会直接执行。它们会返回待确认操作：
+非 dry-run 的 `nas_file_write`、`nas_command_run`、`nas_qpkg_action`、`nas_docker_action` 不会直接执行。它们会返回待确认操作：
 
 ```json
 {
@@ -115,6 +116,7 @@ QACS_TOKEN=从 NAS /etc/config/qnap-ai-control-agent/initial-token.txt 读取
 - [安装和部署](docs/install.md)
 - [WebUI 使用教程](docs/webui.md)
 - [MCP 客户端配置](docs/mcp-clients.md)
+- [Container Station / Docker 管理](docs/container-docker.md)
 - [敏感操作确认机制](docs/confirmations.md)
 - [QPKG 构建说明](docs/qpkg-build.md)
 - [架构说明](docs/architecture.md)

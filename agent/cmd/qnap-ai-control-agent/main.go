@@ -158,7 +158,7 @@ const indexPage = `<!doctype html>
           </div>
         </div>
         <div id="tab-mcp" class="hidden">
-          <p>Mac 端 MCP bridge 使用同一个 NAS 地址和 token。下面的配置会根据当前 WebUI 地址生成。</p>
+          <p>Mac 端 MCP bridge 使用同一个 NAS 地址和 token。下面的配置会根据当前 WebUI 地址生成，填到 Codex、OpenClaw 或 Hermes 的 MCP server 配置里。</p>
           <div class="row">
             <button id="copyEnv">复制环境变量</button>
             <button id="copyJson">复制 MCP JSON</button>
@@ -181,13 +181,20 @@ const indexPage = `<!doctype html>
               <text x="280" y="170" fill="#bdc8d5" text-anchor="middle" font-size="15">MCP 工具调用会转成受控 NAS API 请求</text>
             </svg>
             <div class="card">
-              <h3>Mac 命令</h3>
+              <h3>Agent 添加 MCP</h3>
+              <ul>
+                <li>server 名称填 <code>qnap-ai-control</code>。</li>
+                <li>command 填 <code>node</code>。</li>
+                <li>args 填 Mac 上 <code>mac-bridge/src/mcp-server.js</code> 的绝对路径。</li>
+                <li>env 填 <code>QACS_BASE_URL</code> 和 <code>QACS_TOKEN</code>。</li>
+                <li>重载 agent 后确认工具列表出现 <code>nas_docker_containers</code>。</li>
+              </ul>
               <pre>node /path/to/qnap-ai-control-suite/mac-bridge/src/mcp-server.js</pre>
             </div>
           </div>
         </div>
         <div id="tab-confirm" class="hidden">
-          <p>写文件、执行命令、启停套件属于敏感操作。默认流程是先 prepare，确认短语正确后才 confirm 执行。</p>
+          <p>写文件、执行命令、启停套件、启停容器属于敏感操作。默认流程是先 prepare，确认短语正确后才 confirm 执行。</p>
           <div class="guide">
             <svg viewBox="0 0 560 280" role="img" aria-label="Sensitive operation confirmation flow">
               <defs><marker id="arrow3" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#f5c451"/></marker></defs>
@@ -211,6 +218,7 @@ const indexPage = `<!doctype html>
                 <li><code>file_write</code> 写文件</li>
                 <li><code>command_run</code> 执行 allowlist 命令</li>
                 <li><code>qpkg_action</code> 启停/重启 QPKG</li>
+                <li><code>docker_action</code> 启停/暂停容器</li>
               </ul>
             </div>
           </div>
@@ -228,6 +236,12 @@ POST /v1/files/write
 POST /v1/command/run
 GET  /v1/qnap/qpkg
 POST /v1/qnap/qpkg/action
+GET  /v1/docker/info
+GET  /v1/docker/containers
+GET  /v1/docker/images
+POST /v1/docker/inspect
+POST /v1/docker/logs
+POST /v1/docker/action
 POST /v1/operations/prepare
 POST /v1/operations/confirm</pre>
       </section>
@@ -313,6 +327,7 @@ type Config struct {
 	TokenSHA256     string        `json:"token_sha256"`
 	AllowedRoots    []string      `json:"allowed_roots"`
 	AllowedCommands []string      `json:"allowed_commands"`
+	DockerPaths     []string      `json:"docker_paths,omitempty"`
 	AllowShell      bool          `json:"allow_shell"`
 	AuditLog        string        `json:"audit_log"`
 	MaxReadBytes    int64         `json:"max_read_bytes"`
@@ -371,6 +386,21 @@ type fileWriteRequest struct {
 }
 
 type qpkgActionRequest struct {
+	Name   string `json:"name"`
+	Action string `json:"action"`
+	DryRun bool   `json:"dry_run,omitempty"`
+}
+
+type dockerTargetRequest struct {
+	Name string `json:"name"`
+}
+
+type dockerLogsRequest struct {
+	Name string `json:"name"`
+	Tail int    `json:"tail,omitempty"`
+}
+
+type dockerActionRequest struct {
 	Name   string `json:"name"`
 	Action string `json:"action"`
 	DryRun bool   `json:"dry_run,omitempty"`
@@ -449,6 +479,12 @@ func main() {
 	mux.HandleFunc("/v1/qnap/qpkg", s.withAuth(s.handleQpkgList))
 	mux.HandleFunc("/v1/qnap/qpkg/action", s.withAuth(s.handleQpkgAction))
 	mux.HandleFunc("/v1/qnap/getcfg", s.withAuth(s.handleGetcfg))
+	mux.HandleFunc("/v1/docker/info", s.withAuth(s.handleDockerInfo))
+	mux.HandleFunc("/v1/docker/containers", s.withAuth(s.handleDockerContainers))
+	mux.HandleFunc("/v1/docker/images", s.withAuth(s.handleDockerImages))
+	mux.HandleFunc("/v1/docker/inspect", s.withAuth(s.handleDockerInspect))
+	mux.HandleFunc("/v1/docker/logs", s.withAuth(s.handleDockerLogs))
+	mux.HandleFunc("/v1/docker/action", s.withAuth(s.handleDockerAction))
 	mux.HandleFunc("/v1/operations/prepare", s.withAuth(s.handlePrepareOperation))
 	mux.HandleFunc("/v1/operations/confirm", s.withAuth(s.handleConfirmOperation))
 	mux.HandleFunc("/v1/operations/pending", s.withAuth(s.handlePendingOperations))
@@ -462,9 +498,24 @@ func loadConfig(path string) (Config, error) {
 		Listen:          "127.0.0.1:8756",
 		AllowedRoots:    []string{"/share"},
 		AllowedCommands: []string{"/bin/df", "/bin/ps", "/bin/uname", "/sbin/getcfg", "/sbin/ifconfig", "/sbin/qpkg_cli", "/usr/bin/uptime"},
-		AuditLog:        "/var/log/qnap-ai-control-agent/audit.jsonl",
-		MaxReadBytes:    2 * 1024 * 1024,
-		TimeoutSeconds:  30,
+		DockerPaths: []string{
+			"/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker",
+			"/share/CACHEDEV1_DATA/.qpkg/container-station/usr/bin/docker",
+			"/share/CACHEDEV2_DATA/.qpkg/container-station/bin/docker",
+			"/share/CACHEDEV2_DATA/.qpkg/container-station/usr/bin/docker",
+			"/share/CACHEDEV3_DATA/.qpkg/container-station/bin/docker",
+			"/share/CACHEDEV3_DATA/.qpkg/container-station/usr/bin/docker",
+			"/share/CACHEDEV4_DATA/.qpkg/container-station/bin/docker",
+			"/share/CACHEDEV4_DATA/.qpkg/container-station/usr/bin/docker",
+			"/share/CACHEDEV5_DATA/.qpkg/container-station/bin/docker",
+			"/share/CACHEDEV5_DATA/.qpkg/container-station/usr/bin/docker",
+			"/usr/bin/docker",
+			"/usr/local/bin/docker",
+			"/bin/docker",
+		},
+		AuditLog:       "/var/log/qnap-ai-control-agent/audit.jsonl",
+		MaxReadBytes:   2 * 1024 * 1024,
+		TimeoutSeconds: 30,
 	}
 	if path != "" {
 		b, err := os.ReadFile(path)
@@ -490,6 +541,7 @@ func loadConfig(path string) (Config, error) {
 	cfg.CommandTimeout = time.Duration(cfg.TimeoutSeconds) * time.Second
 	cfg.AllowedRoots = cleanPathList(cfg.AllowedRoots)
 	cfg.AllowedCommands = cleanPathList(cfg.AllowedCommands)
+	cfg.DockerPaths = cleanPathList(cfg.DockerPaths)
 	return cfg, nil
 }
 
@@ -549,7 +601,9 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 			"file_write",
 			"command_run",
 			"qpkg_action",
+			"docker_action",
 		},
+		"docker_paths":             s.cfg.DockerPaths,
 		"confirmation_ttl_seconds": 600,
 	})
 }
@@ -836,6 +890,167 @@ func (s *Server) runQpkgAction(req qpkgActionRequest) (commandResponse, error) {
 	return s.runAllowedCommand(commandRequest{Argv: []string{"/sbin/qpkg_cli", flag, req.Name}, TimeoutSec: 30, DryRun: req.DryRun})
 }
 
+func (s *Server) handleDockerInfo(w http.ResponseWriter, r *http.Request) {
+	version, versionErr := s.runDockerCommand([]string{"version", "--format", "{{json .}}"}, 15, false)
+	info, infoErr := s.runDockerCommand([]string{"info", "--format", "{{json .}}"}, 20, false)
+	if versionErr != nil && infoErr != nil {
+		writeError(w, http.StatusForbidden, versionErr.Error())
+		return
+	}
+	out := map[string]any{}
+	if versionErr == nil {
+		out["version"] = parseJSONOrRaw(version.Stdout)
+		out["version_command"] = version
+	} else {
+		out["version_error"] = versionErr.Error()
+	}
+	if infoErr == nil {
+		out["info"] = parseJSONOrRaw(info.Stdout)
+		out["info_command"] = info
+	} else {
+		out["info_error"] = infoErr.Error()
+	}
+	s.audit(r, "docker.info", nil)
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleDockerContainers(w http.ResponseWriter, r *http.Request) {
+	resp, err := s.runDockerCommand([]string{"ps", "-a", "--no-trunc", "--format", "{{json .}}"}, 20, false)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	s.audit(r, "docker.containers", nil)
+	writeJSON(w, http.StatusOK, map[string]any{"containers": parseJSONLines(resp.Stdout), "command": resp})
+}
+
+func (s *Server) handleDockerImages(w http.ResponseWriter, r *http.Request) {
+	resp, err := s.runDockerCommand([]string{"images", "--no-trunc", "--format", "{{json .}}"}, 20, false)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	s.audit(r, "docker.images", nil)
+	writeJSON(w, http.StatusOK, map[string]any{"images": parseJSONLines(resp.Stdout), "command": resp})
+}
+
+func (s *Server) handleDockerInspect(w http.ResponseWriter, r *http.Request) {
+	var req dockerTargetRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	resp, err := s.inspectDockerTarget(req)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	s.audit(r, "docker.inspect", map[string]any{"name": req.Name})
+	writeJSON(w, http.StatusOK, map[string]any{"inspect": parseJSONOrRaw(resp.Stdout), "command": resp})
+}
+
+func (s *Server) handleDockerLogs(w http.ResponseWriter, r *http.Request) {
+	var req dockerLogsRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	resp, err := s.readDockerLogs(req)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	s.audit(r, "docker.logs", map[string]any{"name": req.Name, "tail": normalizedDockerTail(req.Tail)})
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleDockerAction(w http.ResponseWriter, r *http.Request) {
+	var req dockerActionRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	resp, err := s.runDockerAction(req)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	s.audit(r, "docker.action", map[string]any{"name": req.Name, "action": req.Action, "dry_run": req.DryRun})
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) inspectDockerTarget(req dockerTargetRequest) (commandResponse, error) {
+	if err := validateDockerName(req.Name); err != nil {
+		return commandResponse{}, err
+	}
+	return s.runDockerCommand([]string{"inspect", req.Name}, 20, false)
+}
+
+func (s *Server) readDockerLogs(req dockerLogsRequest) (commandResponse, error) {
+	if err := validateDockerName(req.Name); err != nil {
+		return commandResponse{}, err
+	}
+	tail := normalizedDockerTail(req.Tail)
+	return s.runDockerCommand([]string{"logs", "--tail", strconv.Itoa(tail), req.Name}, 30, false)
+}
+
+func (s *Server) runDockerAction(req dockerActionRequest) (commandResponse, error) {
+	if err := validateDockerName(req.Name); err != nil {
+		return commandResponse{}, err
+	}
+	switch req.Action {
+	case "start", "stop", "restart", "pause", "unpause":
+	default:
+		return commandResponse{}, errors.New("action must be start, stop, restart, pause, or unpause")
+	}
+	return s.runDockerCommand([]string{req.Action, req.Name}, 60, req.DryRun)
+}
+
+func (s *Server) runDockerCommand(args []string, timeoutSec int, dryRun bool) (commandResponse, error) {
+	docker, err := s.findDockerCommand()
+	if err != nil {
+		return commandResponse{}, err
+	}
+	return runCommand(commandRequest{Argv: append([]string{docker}, args...), TimeoutSec: timeoutSec, DryRun: dryRun}, time.Duration(timeoutSec)*time.Second)
+}
+
+func (s *Server) findDockerCommand() (string, error) {
+	for _, candidate := range s.cfg.DockerPaths {
+		clean := filepath.Clean(candidate)
+		info, err := os.Stat(clean)
+		if err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+			return clean, nil
+		}
+	}
+	if docker, err := exec.LookPath("docker"); err == nil {
+		return filepath.Clean(docker), nil
+	}
+	return "", errors.New("docker CLI was not found; install/start QNAP Container Station or set docker_paths in config.json")
+}
+
+func validateDockerName(name string) error {
+	if name == "" {
+		return errors.New("name is required")
+	}
+	if len(name) > 128 {
+		return errors.New("name is too long")
+	}
+	for i, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' || r == ':' {
+			continue
+		}
+		return fmt.Errorf("name contains an invalid character at position %d", i)
+	}
+	return nil
+}
+
+func normalizedDockerTail(tail int) int {
+	if tail <= 0 {
+		return 200
+	}
+	if tail > 2000 {
+		return 2000
+	}
+	return tail
+}
+
 func (s *Server) handlePrepareOperation(w http.ResponseWriter, r *http.Request) {
 	var req prepareOperationRequest
 	if !decodeJSON(w, r, &req) {
@@ -948,6 +1163,17 @@ func (s *Server) validateSensitiveOperation(operation string, raw json.RawMessag
 		}
 		normalized, _ := json.Marshal(req)
 		return fmt.Sprintf("%s QPKG %s", req.Action, req.Name), normalized, nil
+	case "docker_action":
+		var req dockerActionRequest
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return "", nil, err
+		}
+		req.DryRun = false
+		if _, err := s.runDockerAction(dockerActionRequest{Name: req.Name, Action: req.Action, DryRun: true}); err != nil {
+			return "", nil, err
+		}
+		normalized, _ := json.Marshal(req)
+		return fmt.Sprintf("%s Docker container %s", req.Action, req.Name), normalized, nil
 	default:
 		return "", nil, fmt.Errorf("unsupported sensitive operation: %s", operation)
 	}
@@ -992,13 +1218,19 @@ func (s *Server) confirmOperation(req confirmOperationRequest) (PendingOperation
 		}
 		result, err := s.runQpkgAction(qpkgReq)
 		return op, result, err
+	case "docker_action":
+		var dockerReq dockerActionRequest
+		if err := json.Unmarshal(op.Arguments, &dockerReq); err != nil {
+			return op, nil, err
+		}
+		result, err := s.runDockerAction(dockerReq)
+		return op, result, err
 	default:
 		return op, nil, fmt.Errorf("unsupported sensitive operation: %s", op.Operation)
 	}
 }
 
 func (s *Server) runAllowedCommand(req commandRequest) (commandResponse, error) {
-	start := time.Now()
 	if len(req.Argv) == 0 || strings.TrimSpace(req.Argv[0]) == "" {
 		return commandResponse{}, errors.New("argv is required")
 	}
@@ -1013,10 +1245,15 @@ func (s *Server) runAllowedCommand(req commandRequest) (commandResponse, error) 
 	if !stringIn(req.Argv[0], s.cfg.AllowedCommands) {
 		return commandResponse{}, fmt.Errorf("command is not allowed: %s", req.Argv[0])
 	}
+	return runCommand(req, s.cfg.CommandTimeout)
+}
+
+func runCommand(req commandRequest, defaultTimeout time.Duration) (commandResponse, error) {
+	start := time.Now()
 	if req.DryRun {
 		return commandResponse{Argv: req.Argv, DryRun: true}, nil
 	}
-	timeout := s.cfg.CommandTimeout
+	timeout := defaultTimeout
 	if req.TimeoutSec > 0 {
 		timeout = time.Duration(req.TimeoutSec) * time.Second
 	}
@@ -1029,7 +1266,7 @@ func (s *Server) runAllowedCommand(req commandRequest) (commandResponse, error) 
 	stdout, stderr := &strings.Builder{}, &strings.Builder{}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	err = cmd.Run()
+	err := cmd.Run()
 	exitCode := 0
 	if err != nil {
 		exitCode = -1
@@ -1047,6 +1284,31 @@ func (s *Server) runAllowedCommand(req commandRequest) (commandResponse, error) 
 		Stderr:     stderr.String(),
 		DurationMS: time.Since(start).Milliseconds(),
 	}, nil
+}
+
+func parseJSONOrRaw(raw string) any {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	var out any
+	if err := json.Unmarshal([]byte(trimmed), &out); err == nil {
+		return out
+	}
+	return trimmed
+}
+
+func parseJSONLines(raw string) []any {
+	lines := strings.Split(strings.TrimSpace(raw), "\n")
+	out := make([]any, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		out = append(out, parseJSONOrRaw(line))
+	}
+	return out
 }
 
 func (s *Server) allowedPath(p string) (string, error) {
