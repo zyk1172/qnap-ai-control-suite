@@ -66,6 +66,10 @@ GOOS=linux GOARCH="$ARCH" "$ROOT/scripts/build_agent.sh"
 cp "$ROOT/dist/linux-$ARCH/qnap-ai-control-agent" "$BUILD_DIR/shared/bin/"
 cp "$ROOT/qpkg/qpkg.cfg" "$BUILD_DIR/"
 cp "$ROOT/qpkg/shared/qnap-ai-control-agent.sh" "$BUILD_DIR/shared/"
+if [ -d "$ROOT/qpkg/icons" ]; then
+  mkdir -p "$BUILD_DIR/icons"
+  cp "$ROOT/qpkg/icons"/QnapAIControl* "$BUILD_DIR/icons/"
+fi
 if [ -f "$ROOT/qpkg/package_routines" ]; then
   cp "$ROOT/qpkg/package_routines" "$BUILD_DIR/package_routines"
 elif [ -f "$QDK_DIR/template/package_routines" ]; then
