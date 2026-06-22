@@ -116,6 +116,7 @@ QACS_TOKEN=从 NAS /etc/config/qnap-ai-control-agent/initial-token.txt 读取
 - [安装和部署](docs/install.md)
 - [WebUI 使用教程](docs/webui.md)
 - [MCP 客户端配置](docs/mcp-clients.md)
+- [Hermes 和 OpenClaw 接入 MCP](docs/hermes-openclaw-mcp.md)
 - [Container Station / Docker 管理](docs/container-docker.md)
 - [敏感操作确认机制](docs/confirmations.md)
 - [QPKG 构建说明](docs/qpkg-build.md)
