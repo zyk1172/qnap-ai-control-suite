@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestPathWithinRoot(t *testing.T) {
 	tests := []struct {
@@ -122,5 +127,97 @@ func TestAllowedDockerSubcommands(t *testing.T) {
 	}
 	if allowedDockerSubcommand("attach") {
 		t.Fatal("attach should not be allowed")
+	}
+}
+
+func TestSummarizeDockerInspect(t *testing.T) {
+	raw := `[
+	  {
+	    "Id":"abc123",
+	    "Name":"/web",
+	    "Created":"2026-06-29T12:00:00Z",
+	    "Path":"/entrypoint",
+	    "Args":["serve","--port","80"],
+	    "Image":"sha256:imageid",
+	    "State":{"Status":"running","StartedAt":"2026-06-29T12:01:00Z"},
+	    "Config":{"Image":"nginx:latest"},
+	    "NetworkSettings":{"Ports":{"80/tcp":[{"HostIp":"0.0.0.0","HostPort":"8080"}]}}
+	  }
+	]`
+	items := summarizeDockerInspect(parseJSONArray(raw))
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	got := items[0].(map[string]any)
+	if got["Names"] != "web" {
+		t.Fatalf("Names = %v, want web", got["Names"])
+	}
+	if got["Image"] != "nginx:latest" {
+		t.Fatalf("Image = %v, want nginx:latest", got["Image"])
+	}
+	if got["Command"] != "/entrypoint serve --port 80" {
+		t.Fatalf("Command = %v", got["Command"])
+	}
+	if got["Ports"] != "0.0.0.0:8080->80/tcp" {
+		t.Fatalf("Ports = %v", got["Ports"])
+	}
+}
+
+func TestRedactDockerInspectEnv(t *testing.T) {
+	raw := `[
+	  {
+	    "Config": {
+	      "Env": [
+	        "NORMAL=value",
+	        "API_SERVER_KEY=abc",
+	        "PASSWORD=secret",
+	        "ACCESS_TOKEN=token"
+	      ],
+	      "Secret": "plain"
+	    }
+	  }
+	]`
+	redacted := redactDockerInspect(parseJSONOrRaw(raw)).([]any)[0].(map[string]any)
+	config := redacted["Config"].(map[string]any)
+	env := config["Env"].([]any)
+	if env[0] != "NORMAL=value" {
+		t.Fatalf("normal env redacted unexpectedly: %#v", env)
+	}
+	for _, got := range env[1:] {
+		if !strings.Contains(got.(string), "[redacted]") {
+			t.Fatalf("sensitive env was not redacted: %#v", env)
+		}
+	}
+	if config["Secret"] != "[redacted]" {
+		t.Fatalf("Secret field = %#v, want redacted", config["Secret"])
+	}
+}
+
+func TestParseQpkgConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "qpkg.conf")
+	write := `[QnapAIControl]
+Name = QnapAIControl
+Enable = TRUE
+Version = 0.3.0
+
+[container-station]
+Name = Container Station
+Enable = TRUE
+`
+	if err := os.WriteFile(path, []byte(write), 0644); err != nil {
+		t.Fatal(err)
+	}
+	packages, err := parseQpkgConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(packages) != 2 {
+		t.Fatalf("len(packages) = %d, want 2", len(packages))
+	}
+	if packages[0]["name"] != "QnapAIControl" || packages[0]["Version"] != "0.3.0" {
+		t.Fatalf("unexpected first package: %#v", packages[0])
+	}
+	if packages[1]["Name"] != "Container Station" {
+		t.Fatalf("unexpected second package: %#v", packages[1])
 	}
 }

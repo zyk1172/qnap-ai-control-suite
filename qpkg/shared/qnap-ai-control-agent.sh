@@ -56,7 +56,10 @@ start() {
     echo "$QPKG_NAME is already running"
     exit 0
   fi
-  "$BIN" -config "$CONFIG" >> "$STDOUT_LOG" 2>&1 &
+  (
+    trap '' HUP
+    "$BIN" -config "$CONFIG" >> "$STDOUT_LOG" 2>&1
+  ) &
   echo $! > "$PIDFILE"
   echo "$QPKG_NAME started"
 }

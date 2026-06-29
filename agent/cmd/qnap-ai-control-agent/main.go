@@ -895,7 +895,17 @@ func (s *Server) handleQpkgList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, resp)
+	out := map[string]any{"command": resp}
+	if strings.TrimSpace(resp.Stdout) == "" {
+		packages, fallbackErr := parseQpkgConfig("/etc/config/qpkg.conf")
+		if fallbackErr == nil {
+			out["packages"] = packages
+			out["fallback"] = "/etc/config/qpkg.conf"
+		} else {
+			out["fallback_error"] = fallbackErr.Error()
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleGetcfg(w http.ResponseWriter, r *http.Request) {
@@ -1076,13 +1086,28 @@ func (s *Server) handleDockerInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDockerContainers(w http.ResponseWriter, r *http.Request) {
-	resp, err := s.runDockerCommand([]string{"ps", "-a", "--no-trunc", "--format", "{{json .}}"}, 20, false)
+	listResp, err := s.runDockerCommand([]string{"ps", "-aq", "--no-trunc"}, 20, false)
 	if err != nil {
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
+	ids := nonEmptyLines(listResp.Stdout)
+	containers := []any{}
+	out := map[string]any{"containers": containers, "command": listResp, "list_command": listResp}
+	if len(ids) > 0 {
+		inspectArgs := append([]string{"inspect"}, ids...)
+		inspectResp, err := s.runDockerCommand(inspectArgs, 60, false)
+		if err != nil {
+			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		containers = summarizeDockerInspect(parseJSONArray(inspectResp.Stdout))
+		inspectResp.Stdout = "[redacted: docker inspect output is summarized in containers]"
+		out["containers"] = containers
+		out["inspect_command"] = inspectResp
+	}
 	s.audit(r, "docker.containers", nil)
-	writeJSON(w, http.StatusOK, map[string]any{"containers": parseJSONLines(resp.Stdout), "command": resp})
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleDockerImages(w http.ResponseWriter, r *http.Request) {
@@ -1106,7 +1131,9 @@ func (s *Server) handleDockerInspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "docker.inspect", map[string]any{"name": req.Name})
-	writeJSON(w, http.StatusOK, map[string]any{"inspect": parseJSONOrRaw(resp.Stdout), "command": resp})
+	inspect := redactDockerInspect(parseJSONOrRaw(resp.Stdout))
+	resp.Stdout = "[redacted: parsed inspect output is returned with sensitive fields masked]"
+	writeJSON(w, http.StatusOK, map[string]any{"inspect": inspect, "command": resp})
 }
 
 func (s *Server) handleDockerLogs(w http.ResponseWriter, r *http.Request) {
@@ -1625,6 +1652,223 @@ func parseJSONLines(raw string) []any {
 		out = append(out, parseJSONOrRaw(line))
 	}
 	return out
+}
+
+func parseJSONArray(raw string) []any {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	var out []any
+	if err := json.Unmarshal([]byte(trimmed), &out); err == nil {
+		return out
+	}
+	return nil
+}
+
+func nonEmptyLines(raw string) []string {
+	lines := strings.Split(strings.TrimSpace(raw), "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func summarizeDockerInspect(items []any) []any {
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		state, _ := obj["State"].(map[string]any)
+		config, _ := obj["Config"].(map[string]any)
+		network, _ := obj["NetworkSettings"].(map[string]any)
+		summary := map[string]any{
+			"ID":        obj["Id"],
+			"Names":     dockerName(obj["Name"]),
+			"Image":     config["Image"],
+			"ImageID":   obj["Image"],
+			"Command":   dockerCommand(obj["Path"], obj["Args"]),
+			"CreatedAt": obj["Created"],
+			"State":     state["Status"],
+			"Status":    dockerStatus(state),
+			"Ports":     dockerPorts(network["Ports"]),
+		}
+		out = append(out, summary)
+	}
+	return out
+}
+
+func dockerName(v any) string {
+	name, _ := v.(string)
+	return strings.TrimPrefix(name, "/")
+}
+
+func dockerCommand(pathVal, argsVal any) string {
+	parts := []string{}
+	if path, ok := pathVal.(string); ok && path != "" {
+		parts = append(parts, path)
+	}
+	if args, ok := argsVal.([]any); ok {
+		for _, arg := range args {
+			if s, ok := arg.(string); ok {
+				parts = append(parts, s)
+			}
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func dockerStatus(state map[string]any) string {
+	if state == nil {
+		return ""
+	}
+	status, _ := state["Status"].(string)
+	if status == "running" {
+		if started, ok := state["StartedAt"].(string); ok && started != "" {
+			return "running since " + started
+		}
+		return "running"
+	}
+	if finished, ok := state["FinishedAt"].(string); ok && finished != "" {
+		return status + " at " + finished
+	}
+	return status
+}
+
+func dockerPorts(v any) string {
+	ports, ok := v.(map[string]any)
+	if !ok || len(ports) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(ports))
+	for key := range ports {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		bindings, _ := ports[key].([]any)
+		if len(bindings) == 0 {
+			parts = append(parts, key)
+			continue
+		}
+		for _, binding := range bindings {
+			b, _ := binding.(map[string]any)
+			hostIP, _ := b["HostIp"].(string)
+			hostPort, _ := b["HostPort"].(string)
+			if hostPort == "" {
+				parts = append(parts, key)
+			} else if hostIP == "" {
+				parts = append(parts, hostPort+"->"+key)
+			} else {
+				parts = append(parts, hostIP+":"+hostPort+"->"+key)
+			}
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func redactDockerInspect(v any) any {
+	switch typed := v.(type) {
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = redactDockerInspect(item)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, value := range typed {
+			if isSensitiveFieldName(key) {
+				out[key] = "[redacted]"
+				continue
+			}
+			if key == "Env" {
+				out[key] = redactEnvList(value)
+				continue
+			}
+			out[key] = redactDockerInspect(value)
+		}
+		return out
+	default:
+		return typed
+	}
+}
+
+func redactEnvList(v any) any {
+	env, ok := v.([]any)
+	if !ok {
+		return v
+	}
+	out := make([]any, len(env))
+	for i, item := range env {
+		s, ok := item.(string)
+		if !ok {
+			out[i] = item
+			continue
+		}
+		key, _, found := strings.Cut(s, "=")
+		if found && isSensitiveFieldName(key) {
+			out[i] = key + "=[redacted]"
+		} else {
+			out[i] = s
+		}
+	}
+	return out
+}
+
+func isSensitiveFieldName(name string) bool {
+	n := strings.ToLower(name)
+	for _, marker := range []string{"password", "passwd", "token", "secret", "api_key", "apikey", "access_key", "private_key"} {
+		if strings.Contains(n, marker) {
+			return true
+		}
+	}
+	if strings.HasSuffix(n, "_key") || strings.Contains(n, "auth_key") {
+		return true
+	}
+	return false
+}
+
+func parseQpkgConfig(path string) ([]map[string]string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	packages := []map[string]string{}
+	var current map[string]string
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			if current != nil {
+				packages = append(packages, current)
+			}
+			name := strings.TrimSuffix(strings.TrimPrefix(line, "["), "]")
+			current = map[string]string{"name": name}
+			continue
+		}
+		if current == nil {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		current[strings.TrimSpace(key)] = strings.Trim(strings.TrimSpace(value), `"`)
+	}
+	if current != nil {
+		packages = append(packages, current)
+	}
+	return packages, nil
 }
 
 func (s *Server) allowedPath(p string) (string, error) {

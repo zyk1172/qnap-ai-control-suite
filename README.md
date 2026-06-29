@@ -16,7 +16,7 @@ QNAP AI Control Suite 是一个 NAS 端控制代理加 Mac 端 MCP 桥接器。
 
 ## 功能
 
-当前 `0.3.0` 版本包含：
+当前 `0.3.1` 版本包含：
 
 - NAS 健康检查和能力清单
 - WebUI token 保存、连接测试、能力读取和 MCP 配置生成
@@ -54,8 +54,8 @@ make -C tools/QDK/src
 输出：
 
 ```text
-dist/QnapAIControl_0.3.0.qpkg
-dist/QnapAIControl_0.3.0.qpkg.md5
+dist/QnapAIControl_0.3.1.qpkg
+dist/QnapAIControl_0.3.1.qpkg.md5
 ```
 
 没有 QDK 时，脚本会生成 staging archive，用来检查包结构，但不是正式可安装 `.qpkg`。
