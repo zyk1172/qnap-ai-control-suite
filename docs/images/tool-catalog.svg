@@ -15,7 +15,7 @@
   </defs>
   <rect class="bg" width="1200" height="560"/>
   <text class="title" x="52" y="58">MCP tool catalog</text>
-  <text class="small" x="52" y="84">Most tools execute immediately. Only the five highest-risk operation classes require confirmation.</text>
+  <text class="small" x="52" y="84">Most tools execute immediately. Only the three highest-risk operation classes require confirmation.</text>
 
   <rect class="safe" x="70" y="125" width="480" height="365"/>
   <text class="label" x="100" y="164">Read-only tools</text>
@@ -24,24 +24,20 @@
   <text class="mono" x="100" y="266">nas_system_overview</text>
   <text class="mono" x="100" y="296">nas_processes</text>
   <text class="mono" x="100" y="326">nas_audit_tail</text>
-  <text class="mono" x="100" y="356">nas_file_list / stat / read</text>
+  <text class="mono" x="100" y="356">nas_file_list / stat / read / write</text>
   <text class="mono" x="100" y="386">nas_qpkg_list</text>
-  <text class="mono" x="100" y="416">nas_qnap_getcfg</text>
+  <text class="mono" x="100" y="416">nas_command_run / nas_qnap_getcfg</text>
   <text class="mono" x="100" y="446">nas_docker_info / containers / images</text>
   <text class="mono" x="100" y="476">nas_docker_inspect / logs</text>
 
   <rect class="risk" x="650" y="125" width="480" height="365"/>
   <text class="label" x="680" y="164">Confirmation-required operations</text>
-  <text class="mono" x="680" y="212">nas_file_write</text>
-  <text class="small" x="860" y="212">write under allowed roots</text>
-  <text class="mono" x="680" y="262">nas_command_run</text>
-  <text class="small" x="860" y="262">allowlisted command only</text>
-  <text class="mono" x="680" y="312">nas_docker_run / create</text>
-  <text class="small" x="860" y="312">new container execution</text>
-  <text class="mono" x="680" y="362">nas_docker_remove / rmi</text>
-  <text class="small" x="860" y="362">destructive container cleanup</text>
-  <text class="mono" x="680" y="412">nas_prepare_operation</text>
-  <text class="small" x="860" y="412">manual prepare path</text>
-  <text class="mono" x="680" y="462">nas_confirm_operation</text>
-  <text class="small" x="860" y="462">execute after review</text>
+  <text class="mono" x="680" y="232">nas_docker_run / create</text>
+  <text class="small" x="860" y="232">new container execution</text>
+  <text class="mono" x="680" y="302">nas_docker_remove / rmi</text>
+  <text class="small" x="860" y="302">destructive container cleanup</text>
+  <text class="mono" x="680" y="372">nas_qpkg_manage install/remove</text>
+  <text class="small" x="910" y="372">QPKG install/update/remove</text>
+  <text class="mono" x="680" y="442">nas_prepare / confirm</text>
+  <text class="small" x="910" y="442">manual review path</text>
 </svg>

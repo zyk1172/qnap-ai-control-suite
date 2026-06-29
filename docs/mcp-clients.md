@@ -170,7 +170,7 @@ Hermes 如果使用 JSON MCP 配置，直接放入：
 - `nas_prepare_operation`
 - `nas_confirm_operation`
 
-只有 `file_write`、`command_run`、`docker_run_create`、`docker_destroy`、`qpkg_install_remove` 这 5 类最高风险操作会创建待确认操作。普通 QPKG/Docker 启停、日志、stats、pull、exec 默认直接执行。
+只有 `docker_run_create`、`docker_destroy`、`qpkg_install_remove` 这 3 类最高风险操作会创建待确认操作。普通 QPKG/Docker 启停、日志、stats、pull、exec、文件写入和 allowlist 命令默认直接执行。
 
 ## 示例
 
@@ -293,4 +293,4 @@ Hermes 如果使用 JSON MCP 配置，直接放入：
 
 ### 敏感操作没有直接执行
 
-这是正常行为，但只限 5 类最高风险操作：写文件、手动命令、Docker run/create、Docker 删除/清理、QPKG 安装/移除/全量更新。必须把返回的 `id` 和 `confirmation_phrase` 传给 `nas_confirm_operation` 才会执行。
+这是正常行为，但只限 3 类最高风险操作：Docker run/create、Docker 删除/清理、QPKG 安装/移除/全量更新。必须把返回的 `id` 和 `confirmation_phrase` 传给 `nas_confirm_operation` 才会执行。写文件和手动 allowlist 命令默认直接执行。

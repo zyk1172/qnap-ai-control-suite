@@ -2,12 +2,10 @@
 
 ## 为什么需要确认
 
-NAS 控制面可以影响下载器、媒体库、容器、套件和共享文件。`0.3.0` 开始，MCP 桥接器尽量减少确认弹窗：普通查询、启停、日志、stats、pull、exec 默认直接执行；只有最高风险的 5 类操作需要 prepare / confirm。
+NAS 控制面可以影响下载器、媒体库、容器、套件和共享文件。`0.3.2` 开始，MCP 桥接器进一步减少确认弹窗：普通查询、启停、日志、stats、pull、exec、写文件和 allowlist 命令默认直接执行；只有最高风险的 3 类操作需要 prepare / confirm。
 
-## 需要确认的 5 类操作
+## 需要确认的 3 类操作
 
-- `file_write`：写 NAS 文件。
-- `command_run`：手动执行 allowlist 命令。
 - `docker_run_create`：`docker run` / `docker create`。
 - `docker_destroy`：`docker rm`、`docker rmi`、`docker system prune`、`docker volume rm/prune`、`docker network rm/prune`、`docker compose down/rm`。
 - `qpkg_install_remove`：QPKG `add`、`install_file`、`install_url`、`remove`、`update_all`。
@@ -19,6 +17,8 @@ NAS 控制面可以影响下载器、媒体库、容器、套件和共享文件�
 - Docker `pull`、`exec`、`logs`、`inspect`、`stats`。
 - Docker network / volume 的列表、创建、inspect。
 - Docker compose `up`、`restart`、`pull`、`logs`、`ps`。
+- `nas_file_write`：直接执行，但只能写 allowed roots 下路径，并写审计日志。
+- `nas_command_run`：直接执行，但只能运行 allowlist 里的命令，不经过 shell，并写审计日志。
 
 ## 默认流程
 

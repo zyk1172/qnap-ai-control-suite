@@ -26,7 +26,7 @@ const tools = [
     path: { type: "string" },
     max_bytes: { type: "number" }
   }, ["path"]),
-  tool("nas_file_write", "Prepare or dry-run writing a file under an allowed NAS path. Non-dry-run writes require confirmation.", {
+  tool("nas_file_write", "Write or dry-run writing a file under an allowed NAS path. Executes directly with NAS token auth.", {
     path: { type: "string" },
     content: { type: "string" },
     mode: { type: "string", description: "Octal mode, for example 0644." },
@@ -34,7 +34,7 @@ const tools = [
     dry_run: { type: "boolean" },
     reason: { type: "string" }
   }, ["path", "content"]),
-  tool("nas_command_run", "Prepare or dry-run an allowlisted NAS command without shell expansion. Non-dry-run commands require confirmation.", {
+  tool("nas_command_run", "Run or dry-run an allowlisted NAS command without shell expansion. Executes directly with NAS token auth.", {
     argv: { type: "array", items: { type: "string" } },
     timeout_sec: { type: "number" },
     stdin: { type: "string" },
@@ -140,8 +140,8 @@ const tools = [
     key: { type: "string" },
     file: { type: "string", description: "Defaults to /etc/config/qpkg.conf." }
   }, ["section", "key"]),
-  tool("nas_prepare_operation", "Prepare a sensitive operation manually. Use for file_write, command_run, docker_run_create, docker_destroy, or qpkg_install_remove.", {
-    operation: { type: "string", enum: ["file_write", "command_run", "docker_run_create", "docker_destroy", "qpkg_install_remove"] },
+  tool("nas_prepare_operation", "Prepare a sensitive operation manually. Use for docker_run_create, docker_destroy, or qpkg_install_remove.", {
+    operation: { type: "string", enum: ["docker_run_create", "docker_destroy", "qpkg_install_remove"] },
     arguments: { type: "object" },
     reason: { type: "string" }
   }, ["operation", "arguments"]),
@@ -177,7 +177,7 @@ async function handleMessage(msg) {
       return {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "qnap-ai-control-mcp", version: "0.3.0" }
+        serverInfo: { name: "qnap-ai-control-mcp", version: "0.3.2" }
       };
     case "notifications/initialized":
       return {};
@@ -227,8 +227,7 @@ async function callTool(name, args) {
         create_parents: Boolean(args.create_parents),
         dry_run: Boolean(args.dry_run)
       };
-      if (payload.dry_run) return textResult(await request("POST", "/v1/files/write", payload));
-      return preparedResult(await prepare("file_write", payload, args.reason));
+      return textResult(await request("POST", "/v1/files/write", payload));
     }
     case "nas_command_run": {
       const payload = {
@@ -237,8 +236,7 @@ async function callTool(name, args) {
         stdin: args.stdin,
         dry_run: Boolean(args.dry_run)
       };
-      if (payload.dry_run) return textResult(await request("POST", "/v1/command/run", payload));
-      return preparedResult(await prepare("command_run", payload, args.reason));
+      return textResult(await request("POST", "/v1/command/run", payload));
     }
     case "nas_qpkg_list":
       return textResult(await request("GET", "/v1/qnap/qpkg"));

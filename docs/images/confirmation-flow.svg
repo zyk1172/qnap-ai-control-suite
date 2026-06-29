@@ -19,7 +19,7 @@
   </defs>
   <rect class="bg" width="1200" height="460"/>
   <text class="title" x="52" y="58">Sensitive operation confirmation</text>
-  <text class="small" x="52" y="84">Only the five highest-risk operations use prepare and confirm by default.</text>
+  <text class="small" x="52" y="84">Only Docker create/delete and QPKG install/remove/update use prepare and confirm by default.</text>
 
   <rect class="step" x="60" y="145" width="235" height="150"/>
   <text class="label" x="88" y="183">1. Request</text>

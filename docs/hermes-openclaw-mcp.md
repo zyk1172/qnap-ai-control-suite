@@ -158,10 +158,8 @@ nas_confirm_operation
 
 ## 敏感操作确认
 
-普通启停、日志、stats、pull、exec 默认直接执行。只有以下 5 类最高风险操作会先创建待确认操作：
+普通启停、日志、stats、pull、exec、写文件和 allowlist 命令默认直接执行。只有以下 3 类最高风险操作会先创建待确认操作：
 
-- `file_write`
-- `command_run`
 - `docker_run_create`
 - `docker_destroy`
 - `qpkg_install_remove`

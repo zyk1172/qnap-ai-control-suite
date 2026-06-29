@@ -50,14 +50,14 @@ cd /path/to/qnap-ai-control-suite
 输出：
 
 ```text
-dist/QnapAIControl_0.3.1.qpkg
-dist/QnapAIControl_0.3.1.qpkg.md5
+dist/QnapAIControl_0.3.2.qpkg
+dist/QnapAIControl_0.3.2.qpkg.md5
 ```
 
 手工校验包结构：
 
 ```bash
-QP=dist/QnapAIControl_0.3.1.qpkg
+QP=dist/QnapAIControl_0.3.2.qpkg
 SCRIPT_LEN=$(LC_ALL=C grep -a -m1 '^script_len=' "$QP" | sed 's/script_len=//')
 CTRL_LEN=$(LC_ALL=C grep -a -m1 'offset=.*script_len +' "$QP" | sed 's/.*script_len + \([0-9]*\)).*/\1/')
 DATA_LEN=$(LC_ALL=C grep -a -m1 'f.seek(' "$QP" | sed 's/.*f.seek(\([0-9]*\)).*/\1/')

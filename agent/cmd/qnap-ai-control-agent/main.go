@@ -194,7 +194,7 @@ const indexPage = `<!doctype html>
           </div>
         </div>
         <div id="tab-confirm" class="hidden">
-          <p>普通启停、日志、stats、pull、exec 默认直接执行。只有写文件、手动命令、Docker 创建/删除、QPKG 安装/移除这 5 类最高风险操作需要 prepare 和 confirm。</p>
+          <p>普通启停、日志、stats、pull、exec、写文件、allowlist 命令默认直接执行。只有 Docker 创建/删除和 QPKG 安装/移除这 3 类最高风险操作需要 prepare 和 confirm。</p>
           <div class="guide">
             <svg viewBox="0 0 560 280" role="img" aria-label="Sensitive operation confirmation flow">
               <defs><marker id="arrow3" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#f5c451"/></marker></defs>
@@ -215,8 +215,6 @@ const indexPage = `<!doctype html>
             <div class="card">
               <h3>敏感操作</h3>
               <ul>
-                <li><code>file_write</code> 写文件</li>
-                <li><code>command_run</code> 执行 allowlist 命令</li>
                 <li><code>docker_run_create</code> Docker run/create</li>
                 <li><code>docker_destroy</code> Docker 删除/清理</li>
                 <li><code>qpkg_install_remove</code> QPKG 安装/移除/更新</li>
@@ -620,8 +618,6 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		"allow_shell":      s.cfg.AllowShell,
 		"max_read_bytes":   s.cfg.MaxReadBytes,
 		"sensitive_operations": []string{
-			"file_write",
-			"command_run",
 			"docker_run_create",
 			"docker_destroy",
 			"qpkg_install_remove",

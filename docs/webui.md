@@ -89,13 +89,13 @@ QACS_TOKEN=<token>
 
 WebUI 的 `3. 确认敏感操作` 标签页展示确认流程。
 
-以下 5 类最高风险操作不会直接执行：
+以下 3 类最高风险操作不会直接执行：
 
-- 写文件
-- 执行 allowlist 命令
 - Docker run/create
 - Docker 删除/清理，包括 rm、rmi、volume/network prune、compose down
 - QPKG 安装、移除、全量更新
+
+写文件和执行 allowlist 命令会直接执行，但仍受 token、allowed roots、allowlist 和审计日志限制。
 
 流程是：
 
