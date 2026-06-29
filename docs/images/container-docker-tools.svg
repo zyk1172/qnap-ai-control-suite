@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
   <title id="title">Container Station Docker management flow</title>
-  <desc id="desc">How MCP agents use QNAP AI Control Suite to read Docker state and prepare confirmed container actions.</desc>
+  <desc id="desc">How MCP agents use QNAP AI Control Suite to read Docker state, run common actions, and confirm only destructive container actions.</desc>
   <defs>
     <style>
       .bg { fill: #f8fafc; }
@@ -19,7 +19,7 @@
   </defs>
   <rect class="bg" width="1200" height="620"/>
   <text class="title" x="52" y="58">Container Station / Docker management</text>
-  <text class="small" x="52" y="86">Read-only inventory runs immediately. Container actions are prepared first and require a confirmation phrase.</text>
+  <text class="small" x="52" y="86">Inventory and routine actions run immediately. Docker run/create and destructive cleanup require a confirmation phrase.</text>
 
   <rect class="panel" x="60" y="140" width="245" height="115"/>
   <text class="label" x="92" y="182">Mac agent</text>
@@ -53,11 +53,11 @@
   <text class="small" x="310" y="528">bounded diagnostics</text>
 
   <rect class="risk" x="665" y="335" width="455" height="205"/>
-  <text class="label" x="695" y="374">Sensitive tool</text>
-  <text class="mono" x="695" y="420">nas_docker_action</text>
-  <text class="small" x="895" y="420">start / stop / restart / pause / unpause</text>
+  <text class="label" x="695" y="374">High-risk tools</text>
+  <text class="mono" x="695" y="420">nas_docker_run / create</text>
+  <text class="small" x="895" y="420">new container execution</text>
   <text class="mono" x="695" y="470">prepare -> review -> confirm</text>
   <text class="small" x="895" y="470">10 minute in-memory pending operation</text>
-  <text class="mono" x="695" y="520">audit.jsonl</text>
-  <text class="small" x="895" y="520">records prepare and confirm</text>
+  <text class="mono" x="695" y="520">nas_docker_remove / rmi</text>
+  <text class="small" x="895" y="520">destructive cleanup plus audit.jsonl</text>
 </svg>

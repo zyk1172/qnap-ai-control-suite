@@ -75,3 +75,52 @@ func TestDockerTailBounds(t *testing.T) {
 		t.Fatalf("tail = %d, want 42", got)
 	}
 }
+
+func TestDockerRiskClassification(t *testing.T) {
+	risky := []struct {
+		sub  string
+		args []string
+	}{
+		{sub: "rm", args: []string{"container"}},
+		{sub: "rmi", args: []string{"image"}},
+		{sub: "volume", args: []string{"rm", "data"}},
+		{sub: "network", args: []string{"prune", "-f"}},
+		{sub: "compose", args: []string{"-f", "compose.yml", "down"}},
+		{sub: "system", args: []string{"prune", "-a"}},
+	}
+	for _, tt := range risky {
+		if !isDockerDestroyCommand(tt.sub, tt.args) {
+			t.Fatalf("expected docker %s %v to be classified as destructive", tt.sub, tt.args)
+		}
+	}
+	if isDockerDestroyCommand("compose", []string{"-f", "compose.yml", "up", "-d"}) {
+		t.Fatal("compose up should not be classified as destructive")
+	}
+	if isDockerDestroyCommand("volume", []string{"ls"}) {
+		t.Fatal("volume ls should not be classified as destructive")
+	}
+}
+
+func TestQpkgInstallRemoveClassification(t *testing.T) {
+	for _, action := range []string{"add", "install_file", "install_url", "remove", "update_all"} {
+		if !isQpkgInstallRemoveAction(action) {
+			t.Fatalf("expected %s to require confirmation", action)
+		}
+	}
+	for _, action := range []string{"start", "stop", "restart", "enable", "disable", "status"} {
+		if isQpkgInstallRemoveAction(action) {
+			t.Fatalf("expected %s to run without confirmation", action)
+		}
+	}
+}
+
+func TestAllowedDockerSubcommands(t *testing.T) {
+	for _, sub := range []string{"run", "exec", "pull", "compose", "network", "volume", "system"} {
+		if !allowedDockerSubcommand(sub) {
+			t.Fatalf("expected docker subcommand %s to be allowed", sub)
+		}
+	}
+	if allowedDockerSubcommand("attach") {
+		t.Fatal("attach should not be allowed")
+	}
+}

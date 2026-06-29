@@ -32,7 +32,7 @@ dist/linux-amd64/qnap-ai-control-agent
 如果没有 `qbuild`，脚本只会生成：
 
 ```text
-dist/QnapAIControl-0.2.6-linux-amd64.qpkg-staging.tar.gz
+dist/QnapAIControl-0.3.0-linux-amd64.qpkg-staging.tar.gz
 ```
 
 这只是检查包结构用的 staging 包，不能当正式 QPKG 安装。
@@ -43,7 +43,7 @@ dist/QnapAIControl-0.2.6-linux-amd64.qpkg-staging.tar.gz
 
 1. 打开 QNAP App Center。
 2. 选择手动安装。
-3. 上传 `QnapAIControl_0.2.6.qpkg`。
+3. 上传 `QnapAIControl_0.3.0.qpkg`。
 4. 启动 `QNAP AI Control` 套件。
 
 首次启动会生成：

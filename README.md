@@ -10,20 +10,21 @@ QNAP AI Control Suite 是一个 NAS 端控制代理加 Mac 端 MCP 桥接器。
 
 - NAS 端：`qnap-ai-control-agent` 作为 QPKG 服务运行，负责真实文件、套件、命令和审计能力。
 - Mac 端：`qnap-ai-control-mcp` 作为 MCP stdio server，把 NAS 能力暴露给 Codex、OpenClaw、Hermes。
-- 安全层：写文件、执行命令、启停套件等敏感操作默认走 prepare / confirm 两段式确认。
+- 安全层：最高风险操作走 prepare / confirm 两段式确认，普通启停和查询尽量直接执行。
 
 它比单纯的 QNAP MCP 更适合深度控制，因为 MCP server 不直接绑定 NAS 实现。NAS 权限、审计、命令白名单和扩展适配都在 NAS 端代理里管理，Mac 端只是协议桥。
 
 ## 功能
 
-当前 `0.2.6` 版本包含：
+当前 `0.3.0` 版本包含：
 
 - NAS 健康检查和能力清单
 - WebUI token 保存、连接测试、能力读取和 MCP 配置生成
 - 系统概览、磁盘、进程列表
 - `/share` 目录下文件列表、stat、读取、写入
-- QPKG 套件列表、start、stop、restart
-- Container Station / Docker：engine info、容器列表、镜像列表、inspect、logs、start、stop、restart、pause、unpause
+- QPKG 套件列表、start、stop、restart、enable、disable、status、download、install、remove、update_all
+- Container Station / Docker：engine info、容器/镜像列表、inspect、logs、stats、exec、pull、run/create、rm/rmi、network、volume、compose
+- NAS 温度、硬盘温度、风扇和 hwmon 传感器读取
 - QNAP `getcfg` 配置读取，限制在 `/etc/config/*.conf`
 - allowlist 命令执行，不经过 shell
 - JSONL 审计日志
@@ -53,8 +54,8 @@ make -C tools/QDK/src
 输出：
 
 ```text
-dist/QnapAIControl_0.2.6.qpkg
-dist/QnapAIControl_0.2.6.qpkg.md5
+dist/QnapAIControl_0.3.0.qpkg
+dist/QnapAIControl_0.3.0.qpkg.md5
 ```
 
 没有 QDK 时，脚本会生成 staging archive，用来检查包结构，但不是正式可安装 `.qpkg`。
@@ -84,14 +85,20 @@ QACS_TOKEN=从 NAS /etc/config/qnap-ai-control-agent/initial-token.txt 读取
 
 ## 敏感操作确认
 
-非 dry-run 的 `nas_file_write`、`nas_command_run`、`nas_qpkg_action`、`nas_docker_action` 不会直接执行。它们会返回待确认操作：
+默认尽量直接执行，只有 5 类最高风险操作会返回待确认操作：
+
+- `file_write`：写 NAS 文件
+- `command_run`：手动 allowlist 命令
+- `docker_run_create`：Docker run/create
+- `docker_destroy`：Docker rm/rmi/prune、volume/network 删除、compose down/rm
+- `qpkg_install_remove`：QPKG 安装、移除、全量更新
 
 ```json
 {
   "confirmation_required": true,
   "operation": {
     "id": "...",
-    "summary": "restart QPKG MoviePilot",
+    "summary": "docker rm ...",
     "confirmation_phrase": "CONFIRM ..."
   }
 }

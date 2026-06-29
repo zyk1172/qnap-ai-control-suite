@@ -122,6 +122,7 @@ hermes -z "使用 qnap-ai-control MCP 调用 nas_health，再调用 nas_docker_i
 nas_health
 nas_capabilities
 nas_system_overview
+nas_system_thermal
 nas_processes
 nas_audit_tail
 nas_file_list
@@ -131,6 +132,7 @@ nas_file_write
 nas_command_run
 nas_qpkg_list
 nas_qpkg_action
+nas_qpkg_manage
 nas_qnap_getcfg
 nas_docker_info
 nas_docker_containers
@@ -138,6 +140,17 @@ nas_docker_images
 nas_docker_inspect
 nas_docker_logs
 nas_docker_action
+nas_docker_command
+nas_docker_run
+nas_docker_create
+nas_docker_remove
+nas_docker_exec
+nas_docker_pull
+nas_docker_image_remove
+nas_docker_network
+nas_docker_volume
+nas_docker_compose
+nas_docker_stats
 nas_prepare_operation
 nas_pending_operations
 nas_confirm_operation
@@ -145,12 +158,13 @@ nas_confirm_operation
 
 ## 敏感操作确认
 
-以下工具默认不会直接执行真实修改，而是先创建待确认操作：
+普通启停、日志、stats、pull、exec 默认直接执行。只有以下 5 类最高风险操作会先创建待确认操作：
 
-- `nas_file_write`
-- `nas_command_run`
-- `nas_qpkg_action`
-- `nas_docker_action`
+- `file_write`
+- `command_run`
+- `docker_run_create`
+- `docker_destroy`
+- `qpkg_install_remove`
 
 执行流程：
 
@@ -159,15 +173,14 @@ nas_confirm_operation
 3. 使用返回的 `id` 和 `confirmation_phrase` 调用 `nas_confirm_operation`。
 4. agent 执行操作并写入审计日志。
 
-示例：准备重启容器：
+示例：准备创建容器：
 
 ```json
 {
-  "tool": "nas_docker_action",
+  "tool": "nas_docker_run",
   "arguments": {
-    "name": "CONTAINER_NAME",
-    "action": "restart",
-    "reason": "Apply configuration changes"
+    "args": ["-d", "--name", "CONTAINER_NAME", "IMAGE:TAG"],
+    "reason": "Create container"
   }
 }
 ```

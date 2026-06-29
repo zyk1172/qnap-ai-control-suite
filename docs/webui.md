@@ -6,12 +6,6 @@ QNAP AI Control 的 WebUI 地址：
 http://NAS_IP:8756/
 ```
 
-例如：
-
-```text
-http://NAS_IP:8756/
-```
-
 ## 1. 在 WebUI 设置 token
 
 首次启动 QPKG 后，NAS 会生成 token 文件：
@@ -95,12 +89,13 @@ QACS_TOKEN=<token>
 
 WebUI 的 `3. 确认敏感操作` 标签页展示确认流程。
 
-以下操作不会直接执行：
+以下 5 类最高风险操作不会直接执行：
 
 - 写文件
 - 执行 allowlist 命令
-- 启动、停止、重启 QPKG
-- 启动、停止、重启、暂停、恢复 Docker 容器
+- Docker run/create
+- Docker 删除/清理，包括 rm、rmi、volume/network prune、compose down
+- QPKG 安装、移除、全量更新
 
 流程是：
 

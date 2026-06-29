@@ -8,7 +8,7 @@
 - WebUI 可以打开：`http://NAS_IP:8756/`
 - WebUI 已保存 token，并且 `测试连接` 成功。
 - Mac 上有 Node.js，可以运行 `node`。
-- 本仓库在 Mac 上的路径是 `/path/to/qnap-ai-control-suite`。
+- 本仓库在 Mac 上的路径示例为 `/path/to/qnap-ai-control-suite`，请替换成自己的实际路径。
 
 ## MCP server 命令
 
@@ -133,30 +133,44 @@ Hermes 如果使用 JSON MCP 配置，直接放入：
 - `nas_health`
 - `nas_capabilities`
 - `nas_system_overview`
+- `nas_system_thermal`
 - `nas_processes`
 - `nas_audit_tail`
 - `nas_file_list`
 - `nas_file_stat`
 - `nas_file_read`
 - `nas_qpkg_list`
+- `nas_qpkg_manage` 的 `status`
 - `nas_qnap_getcfg`
 - `nas_docker_info`
 - `nas_docker_containers`
 - `nas_docker_images`
 - `nas_docker_inspect`
 - `nas_docker_logs`
+- `nas_docker_stats`
 - `nas_pending_operations`
 
-敏感工具：
+操作工具：
 
 - `nas_file_write`
 - `nas_command_run`
 - `nas_qpkg_action`
+- `nas_qpkg_manage`
 - `nas_docker_action`
+- `nas_docker_command`
+- `nas_docker_run`
+- `nas_docker_create`
+- `nas_docker_remove`
+- `nas_docker_exec`
+- `nas_docker_pull`
+- `nas_docker_image_remove`
+- `nas_docker_network`
+- `nas_docker_volume`
+- `nas_docker_compose`
 - `nas_prepare_operation`
 - `nas_confirm_operation`
 
-`nas_file_write`、`nas_command_run`、`nas_qpkg_action`、`nas_docker_action` 在 `dry_run: false` 时只会创建待确认操作，不会直接执行。
+只有 `file_write`、`command_run`、`docker_run_create`、`docker_destroy`、`qpkg_install_remove` 这 5 类最高风险操作会创建待确认操作。普通 QPKG/Docker 启停、日志、stats、pull、exec 默认直接执行。
 
 ## 示例
 
@@ -183,7 +197,7 @@ Hermes 如果使用 JSON MCP 配置，直接放入：
 }
 ```
 
-dry-run 重启套件：
+重启套件：
 
 ```json
 {
@@ -191,8 +205,7 @@ dry-run 重启套件：
   "arguments": {
     "name": "MoviePilot",
     "action": "restart",
-    "dry_run": true,
-    "reason": "验证将要执行的 QPKG restart 命令"
+    "dry_run": false
   }
 }
 ```
@@ -218,7 +231,7 @@ dry-run 重启套件：
 }
 ```
 
-dry-run 重启容器：
+重启容器：
 
 ```json
 {
@@ -226,13 +239,34 @@ dry-run 重启容器：
   "arguments": {
     "name": "moviepilot",
     "action": "restart",
-    "dry_run": true,
-    "reason": "验证将要执行的 Docker restart 命令"
+    "dry_run": false
   }
 }
 ```
 
-真正执行重启时不要带 `dry_run: true`。工具会返回 `confirmation_required`，用户检查 `summary` 后再调用 `nas_confirm_operation`。
+创建容器会进入确认流程：
+
+```json
+{
+  "tool": "nas_docker_run",
+  "arguments": {
+    "args": ["-d", "--name", "web", "-p", "8080:80", "nginx:latest"],
+    "reason": "创建测试 Web 容器"
+  }
+}
+```
+
+删除容器也会进入确认流程：
+
+```json
+{
+  "tool": "nas_docker_remove",
+  "arguments": {
+    "args": ["-f", "web"],
+    "reason": "移除测试 Web 容器"
+  }
+}
+```
 
 ## 常见问题
 
@@ -259,4 +293,4 @@ dry-run 重启容器：
 
 ### 敏感操作没有直接执行
 
-这是正常行为。`nas_docker_action`、`nas_qpkg_action`、`nas_file_write`、`nas_command_run` 默认先创建待确认操作。必须把返回的 `id` 和 `confirmation_phrase` 传给 `nas_confirm_operation` 才会执行。
+这是正常行为，但只限 5 类最高风险操作：写文件、手动命令、Docker run/create、Docker 删除/清理、QPKG 安装/移除/全量更新。必须把返回的 `id` 和 `confirmation_phrase` 传给 `nas_confirm_operation` 才会执行。

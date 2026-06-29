@@ -46,6 +46,7 @@ Current endpoints:
 - `GET /v1/capabilities`
 - `GET /v1/system/overview`
 - `GET /v1/system/processes`
+- `GET /v1/system/thermal`
 - `GET /v1/audit/tail`
 - `GET /v1/files/list?path=/share/...`
 - `GET /v1/files/stat?path=/share/...`
@@ -54,6 +55,7 @@ Current endpoints:
 - `POST /v1/command/run`
 - `GET /v1/qnap/qpkg`
 - `POST /v1/qnap/qpkg/action`
+- `POST /v1/qnap/qpkg/manage`
 - `POST /v1/qnap/getcfg`
 - `GET /v1/docker/info`
 - `GET /v1/docker/containers`
@@ -61,6 +63,7 @@ Current endpoints:
 - `POST /v1/docker/inspect`
 - `POST /v1/docker/logs`
 - `POST /v1/docker/action`
+- `POST /v1/docker/command`
 - `POST /v1/operations/prepare`
 - `POST /v1/operations/confirm`
 - `GET /v1/operations/pending`

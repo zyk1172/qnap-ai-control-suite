@@ -194,7 +194,7 @@ const indexPage = `<!doctype html>
           </div>
         </div>
         <div id="tab-confirm" class="hidden">
-          <p>写文件、执行命令、启停套件、启停容器属于敏感操作。默认流程是先 prepare，确认短语正确后才 confirm 执行。</p>
+          <p>普通启停、日志、stats、pull、exec 默认直接执行。只有写文件、手动命令、Docker 创建/删除、QPKG 安装/移除这 5 类最高风险操作需要 prepare 和 confirm。</p>
           <div class="guide">
             <svg viewBox="0 0 560 280" role="img" aria-label="Sensitive operation confirmation flow">
               <defs><marker id="arrow3" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#f5c451"/></marker></defs>
@@ -217,8 +217,9 @@ const indexPage = `<!doctype html>
               <ul>
                 <li><code>file_write</code> 写文件</li>
                 <li><code>command_run</code> 执行 allowlist 命令</li>
-                <li><code>qpkg_action</code> 启停/重启 QPKG</li>
-                <li><code>docker_action</code> 启停/暂停容器</li>
+                <li><code>docker_run_create</code> Docker run/create</li>
+                <li><code>docker_destroy</code> Docker 删除/清理</li>
+                <li><code>qpkg_install_remove</code> QPKG 安装/移除/更新</li>
               </ul>
             </div>
           </div>
@@ -230,18 +231,21 @@ const indexPage = `<!doctype html>
 GET  /v1/capabilities
 GET  /v1/system/overview
 GET  /v1/system/processes
+GET  /v1/system/thermal
 POST /v1/files/list
 POST /v1/files/read
 POST /v1/files/write
 POST /v1/command/run
 GET  /v1/qnap/qpkg
 POST /v1/qnap/qpkg/action
+POST /v1/qnap/qpkg/manage
 GET  /v1/docker/info
 GET  /v1/docker/containers
 GET  /v1/docker/images
 POST /v1/docker/inspect
 POST /v1/docker/logs
 POST /v1/docker/action
+POST /v1/docker/command
 POST /v1/operations/prepare
 POST /v1/operations/confirm</pre>
       </section>
@@ -391,6 +395,14 @@ type qpkgActionRequest struct {
 	DryRun bool   `json:"dry_run,omitempty"`
 }
 
+type qpkgManageRequest struct {
+	Name   string `json:"name,omitempty"`
+	Action string `json:"action"`
+	Path   string `json:"path,omitempty"`
+	URL    string `json:"url,omitempty"`
+	DryRun bool   `json:"dry_run,omitempty"`
+}
+
 type dockerTargetRequest struct {
 	Name string `json:"name"`
 }
@@ -404,6 +416,13 @@ type dockerActionRequest struct {
 	Name   string `json:"name"`
 	Action string `json:"action"`
 	DryRun bool   `json:"dry_run,omitempty"`
+}
+
+type dockerCommandRequest struct {
+	Subcommand string   `json:"subcommand"`
+	Args       []string `json:"args,omitempty"`
+	TimeoutSec int      `json:"timeout_sec,omitempty"`
+	DryRun     bool     `json:"dry_run,omitempty"`
 }
 
 type getcfgRequest struct {
@@ -470,6 +489,7 @@ func main() {
 	mux.HandleFunc("/v1/capabilities", s.withAuth(s.handleCapabilities))
 	mux.HandleFunc("/v1/system/overview", s.withAuth(s.handleSystemOverview))
 	mux.HandleFunc("/v1/system/processes", s.withAuth(s.handleSystemProcesses))
+	mux.HandleFunc("/v1/system/thermal", s.withAuth(s.handleSystemThermal))
 	mux.HandleFunc("/v1/audit/tail", s.withAuth(s.handleAuditTail))
 	mux.HandleFunc("/v1/files/list", s.withAuth(s.handleFileList))
 	mux.HandleFunc("/v1/files/stat", s.withAuth(s.handleFileStat))
@@ -478,6 +498,7 @@ func main() {
 	mux.HandleFunc("/v1/command/run", s.withAuth(s.handleCommandRun))
 	mux.HandleFunc("/v1/qnap/qpkg", s.withAuth(s.handleQpkgList))
 	mux.HandleFunc("/v1/qnap/qpkg/action", s.withAuth(s.handleQpkgAction))
+	mux.HandleFunc("/v1/qnap/qpkg/manage", s.withAuth(s.handleQpkgManage))
 	mux.HandleFunc("/v1/qnap/getcfg", s.withAuth(s.handleGetcfg))
 	mux.HandleFunc("/v1/docker/info", s.withAuth(s.handleDockerInfo))
 	mux.HandleFunc("/v1/docker/containers", s.withAuth(s.handleDockerContainers))
@@ -485,6 +506,7 @@ func main() {
 	mux.HandleFunc("/v1/docker/inspect", s.withAuth(s.handleDockerInspect))
 	mux.HandleFunc("/v1/docker/logs", s.withAuth(s.handleDockerLogs))
 	mux.HandleFunc("/v1/docker/action", s.withAuth(s.handleDockerAction))
+	mux.HandleFunc("/v1/docker/command", s.withAuth(s.handleDockerCommand))
 	mux.HandleFunc("/v1/operations/prepare", s.withAuth(s.handlePrepareOperation))
 	mux.HandleFunc("/v1/operations/confirm", s.withAuth(s.handleConfirmOperation))
 	mux.HandleFunc("/v1/operations/pending", s.withAuth(s.handlePendingOperations))
@@ -600,8 +622,9 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		"sensitive_operations": []string{
 			"file_write",
 			"command_run",
-			"qpkg_action",
-			"docker_action",
+			"docker_run_create",
+			"docker_destroy",
+			"qpkg_install_remove",
 		},
 		"docker_paths":             s.cfg.DockerPaths,
 		"confirmation_ttl_seconds": 600,
@@ -637,6 +660,53 @@ func (s *Server) handleSystemProcesses(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, "system.processes", nil)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleSystemThermal(w http.ResponseWriter, r *http.Request) {
+	out := map[string]any{}
+	for key, argv := range map[string][]string{
+		"cpu":       {"/sbin/getsysinfo", "cputmp"},
+		"system":    {"/sbin/getsysinfo", "systmp"},
+		"hd_count":  {"/sbin/getsysinfo", "hdnum"},
+		"fan_count": {"/sbin/getsysinfo", "sysfannum"},
+		"fan_1":     {"/sbin/getsysinfo", "sysfan", "1"},
+	} {
+		resp, err := runCommand(commandRequest{Argv: argv, TimeoutSec: 8}, 8*time.Second)
+		if err == nil {
+			out[key] = strings.TrimSpace(resp.Stdout)
+		} else {
+			out[key+"_error"] = err.Error()
+		}
+	}
+	if raw, ok := out["hd_count"].(string); ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil {
+			disks := []map[string]string{}
+			for i := 1; i <= n && i <= 16; i++ {
+				resp, err := runCommand(commandRequest{Argv: []string{"/sbin/getsysinfo", "hdtmp", strconv.Itoa(i)}, TimeoutSec: 8}, 8*time.Second)
+				value := ""
+				if err == nil {
+					value = strings.TrimSpace(resp.Stdout)
+				}
+				disks = append(disks, map[string]string{"disk": strconv.Itoa(i), "temperature": value})
+			}
+			out["disks"] = disks
+		}
+	}
+	hwmon := []map[string]any{}
+	if matches, err := filepath.Glob("/sys/class/hwmon/hwmon*/temp*_input"); err == nil {
+		for _, p := range matches {
+			b, err := os.ReadFile(p)
+			if err != nil {
+				continue
+			}
+			raw := strings.TrimSpace(string(b))
+			milliC, _ := strconv.Atoi(raw)
+			hwmon = append(hwmon, map[string]any{"path": p, "raw": raw, "celsius": float64(milliC) / 1000})
+		}
+	}
+	out["hwmon"] = hwmon
+	s.audit(r, "system.thermal", nil)
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleAuditTail(w http.ResponseWriter, r *http.Request) {
@@ -872,6 +942,20 @@ func (s *Server) handleQpkgAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (s *Server) handleQpkgManage(w http.ResponseWriter, r *http.Request) {
+	var req qpkgManageRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	resp, err := s.runQpkgManage(req)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	s.audit(r, "qnap.qpkg.manage", map[string]any{"name": req.Name, "action": req.Action, "path": req.Path, "url": req.URL, "dry_run": req.DryRun})
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (s *Server) runQpkgAction(req qpkgActionRequest) (commandResponse, error) {
 	if req.Name == "" {
 		return commandResponse{}, errors.New("name is required")
@@ -888,6 +972,83 @@ func (s *Server) runQpkgAction(req qpkgActionRequest) (commandResponse, error) {
 		return commandResponse{}, errors.New("action must be start, stop, or restart")
 	}
 	return s.runAllowedCommand(commandRequest{Argv: []string{"/sbin/qpkg_cli", flag, req.Name}, TimeoutSec: 30, DryRun: req.DryRun})
+}
+
+func (s *Server) runQpkgManage(req qpkgManageRequest) (commandResponse, error) {
+	argv := []string{"/sbin/qpkg_cli"}
+	timeout := 60
+	switch req.Action {
+	case "start", "stop", "restart":
+		return s.runQpkgAction(qpkgActionRequest{Name: req.Name, Action: req.Action, DryRun: req.DryRun})
+	case "enable":
+		if req.Name == "" {
+			return commandResponse{}, errors.New("name is required")
+		}
+		argv = append(argv, "--enable", req.Name)
+	case "disable":
+		if req.Name == "" {
+			return commandResponse{}, errors.New("name is required")
+		}
+		argv = append(argv, "--disable", req.Name)
+	case "status":
+		if req.Name == "" {
+			return commandResponse{}, errors.New("name is required")
+		}
+		argv = append(argv, "-s", req.Name, "--output", "2")
+	case "download":
+		if req.Name == "" {
+			return commandResponse{}, errors.New("name is required")
+		}
+		argv = append(argv, "-g", req.Name)
+		timeout = 300
+	case "add":
+		if req.Name == "" {
+			return commandResponse{}, errors.New("name is required")
+		}
+		argv = append(argv, "-a", req.Name)
+		timeout = 600
+	case "install_file":
+		if req.Path == "" {
+			return commandResponse{}, errors.New("path is required")
+		}
+		clean, err := s.allowedPath(req.Path)
+		if err != nil {
+			return commandResponse{}, err
+		}
+		argv = append(argv, "-m", clean, "-K")
+		timeout = 600
+	case "install_url":
+		if req.URL == "" {
+			return commandResponse{}, errors.New("url is required")
+		}
+		if !strings.HasPrefix(req.URL, "https://") && !strings.HasPrefix(req.URL, "http://") {
+			return commandResponse{}, errors.New("url must start with http:// or https://")
+		}
+		argv = append(argv, "-u", req.URL)
+		timeout = 600
+	case "remove":
+		if req.Name == "" {
+			return commandResponse{}, errors.New("name is required")
+		}
+		argv = append(argv, "-R", req.Name)
+		timeout = 300
+	case "clean":
+		if req.Name == "" {
+			return commandResponse{}, errors.New("name is required")
+		}
+		argv = append(argv, "-C", req.Name)
+	case "cancel":
+		if req.Name == "" {
+			return commandResponse{}, errors.New("name is required")
+		}
+		argv = append(argv, "-c", req.Name)
+	case "update_all":
+		argv = append(argv, "-U", "--immediate")
+		timeout = 900
+	default:
+		return commandResponse{}, errors.New("action must be start, stop, restart, enable, disable, status, download, add, install_file, install_url, remove, clean, cancel, or update_all")
+	}
+	return s.runAllowedCommand(commandRequest{Argv: argv, TimeoutSec: timeout, DryRun: req.DryRun})
 }
 
 func (s *Server) handleDockerInfo(w http.ResponseWriter, r *http.Request) {
@@ -976,6 +1137,20 @@ func (s *Server) handleDockerAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (s *Server) handleDockerCommand(w http.ResponseWriter, r *http.Request) {
+	var req dockerCommandRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	resp, err := s.runDockerCommandRequest(req)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	s.audit(r, "docker.command", map[string]any{"subcommand": req.Subcommand, "args": redactArgv(req.Args), "dry_run": req.DryRun})
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (s *Server) inspectDockerTarget(req dockerTargetRequest) (commandResponse, error) {
 	if err := validateDockerName(req.Name); err != nil {
 		return commandResponse{}, err
@@ -1003,6 +1178,21 @@ func (s *Server) runDockerAction(req dockerActionRequest) (commandResponse, erro
 	return s.runDockerCommand([]string{req.Action, req.Name}, 60, req.DryRun)
 }
 
+func (s *Server) runDockerCommandRequest(req dockerCommandRequest) (commandResponse, error) {
+	sub := strings.TrimSpace(req.Subcommand)
+	if !allowedDockerSubcommand(sub) {
+		return commandResponse{}, fmt.Errorf("docker subcommand is not allowed: %s", sub)
+	}
+	if err := validateDockerArgs(req.Args); err != nil {
+		return commandResponse{}, err
+	}
+	timeout := req.TimeoutSec
+	if timeout <= 0 {
+		timeout = defaultDockerTimeout(sub, req.Args)
+	}
+	return s.runDockerCommand(append([]string{sub}, req.Args...), timeout, req.DryRun)
+}
+
 func (s *Server) runDockerCommand(args []string, timeoutSec int, dryRun bool) (commandResponse, error) {
 	docker, err := s.findDockerCommand()
 	if err != nil {
@@ -1023,6 +1213,79 @@ func (s *Server) findDockerCommand() (string, error) {
 		return filepath.Clean(docker), nil
 	}
 	return "", errors.New("docker CLI was not found; install/start QNAP Container Station or set docker_paths in config.json")
+}
+
+func allowedDockerSubcommand(sub string) bool {
+	switch sub {
+	case "run", "create", "exec", "pull", "push", "build", "images", "ps", "inspect", "logs", "stats", "top", "port", "diff", "start", "stop", "restart", "pause", "unpause", "kill", "rename", "update", "rm", "rmi", "tag", "save", "load", "cp", "commit", "export", "import", "history", "network", "volume", "system", "compose":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateDockerArgs(args []string) error {
+	if len(args) > 120 {
+		return errors.New("too many docker arguments")
+	}
+	for _, arg := range args {
+		if strings.ContainsRune(arg, 0) {
+			return errors.New("docker argument contains NUL")
+		}
+		if len(arg) > 4096 {
+			return errors.New("docker argument is too long")
+		}
+	}
+	return nil
+}
+
+func defaultDockerTimeout(sub string, args []string) int {
+	switch sub {
+	case "pull", "push", "build", "run", "create", "load", "save", "import", "export":
+		return 600
+	case "compose":
+		if dockerArgsContainCommand(args, "up") || dockerArgsContainCommand(args, "build") || dockerArgsContainCommand(args, "pull") {
+			return 900
+		}
+		return 300
+	case "stats":
+		return 20
+	default:
+		return 120
+	}
+}
+
+func dockerArgsContainCommand(args []string, command string) bool {
+	for _, arg := range args {
+		if arg == command {
+			return true
+		}
+	}
+	return false
+}
+
+func isDockerDestroyCommand(sub string, args []string) bool {
+	switch sub {
+	case "rm", "rmi":
+		return true
+	case "system":
+		return dockerArgsContainCommand(args, "prune")
+	case "volume", "network":
+		return dockerArgsContainCommand(args, "rm") || dockerArgsContainCommand(args, "prune")
+	case "compose":
+		return dockerArgsContainCommand(args, "down") || dockerArgsContainCommand(args, "rm")
+	default:
+		return false
+	}
+}
+
+func isQpkgInstallRemoveAction(action string) bool {
+	switch action {
+	case "add", "install_file", "install_url", "remove", "update_all":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateDockerName(name string) error {
@@ -1163,17 +1426,55 @@ func (s *Server) validateSensitiveOperation(operation string, raw json.RawMessag
 		}
 		normalized, _ := json.Marshal(req)
 		return fmt.Sprintf("%s QPKG %s", req.Action, req.Name), normalized, nil
-	case "docker_action":
-		var req dockerActionRequest
+	case "docker_run_create":
+		var req dockerCommandRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return "", nil, err
 		}
 		req.DryRun = false
-		if _, err := s.runDockerAction(dockerActionRequest{Name: req.Name, Action: req.Action, DryRun: true}); err != nil {
+		if req.Subcommand != "run" && req.Subcommand != "create" {
+			return "", nil, errors.New("docker_run_create only supports docker run or create")
+		}
+		if _, err := s.runDockerCommandRequest(dockerCommandRequest{Subcommand: req.Subcommand, Args: req.Args, TimeoutSec: req.TimeoutSec, DryRun: true}); err != nil {
 			return "", nil, err
 		}
 		normalized, _ := json.Marshal(req)
-		return fmt.Sprintf("%s Docker container %s", req.Action, req.Name), normalized, nil
+		return fmt.Sprintf("docker %s %s", req.Subcommand, strings.Join(redactArgv(req.Args), " ")), normalized, nil
+	case "docker_destroy":
+		var req dockerCommandRequest
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return "", nil, err
+		}
+		req.DryRun = false
+		if !isDockerDestroyCommand(req.Subcommand, req.Args) {
+			return "", nil, errors.New("docker_destroy only supports remove, prune, or compose down/rm commands")
+		}
+		if _, err := s.runDockerCommandRequest(dockerCommandRequest{Subcommand: req.Subcommand, Args: req.Args, TimeoutSec: req.TimeoutSec, DryRun: true}); err != nil {
+			return "", nil, err
+		}
+		normalized, _ := json.Marshal(req)
+		return fmt.Sprintf("docker destructive command: docker %s %s", req.Subcommand, strings.Join(redactArgv(req.Args), " ")), normalized, nil
+	case "qpkg_install_remove":
+		var req qpkgManageRequest
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return "", nil, err
+		}
+		req.DryRun = false
+		if !isQpkgInstallRemoveAction(req.Action) {
+			return "", nil, errors.New("qpkg_install_remove only supports add, install_file, install_url, remove, or update_all")
+		}
+		if _, err := s.runQpkgManage(qpkgManageRequest{Name: req.Name, Action: req.Action, Path: req.Path, URL: req.URL, DryRun: true}); err != nil {
+			return "", nil, err
+		}
+		normalized, _ := json.Marshal(req)
+		target := req.Name
+		if target == "" {
+			target = req.Path
+		}
+		if target == "" {
+			target = req.URL
+		}
+		return fmt.Sprintf("%s QPKG %s", req.Action, target), normalized, nil
 	default:
 		return "", nil, fmt.Errorf("unsupported sensitive operation: %s", operation)
 	}
@@ -1225,6 +1526,20 @@ func (s *Server) confirmOperation(req confirmOperationRequest) (PendingOperation
 		}
 		result, err := s.runDockerAction(dockerReq)
 		return op, result, err
+	case "docker_run_create", "docker_destroy":
+		var dockerReq dockerCommandRequest
+		if err := json.Unmarshal(op.Arguments, &dockerReq); err != nil {
+			return op, nil, err
+		}
+		result, err := s.runDockerCommandRequest(dockerReq)
+		return op, result, err
+	case "qpkg_install_remove":
+		var qpkgReq qpkgManageRequest
+		if err := json.Unmarshal(op.Arguments, &qpkgReq); err != nil {
+			return op, nil, err
+		}
+		result, err := s.runQpkgManage(qpkgReq)
+		return op, result, err
 	default:
 		return op, nil, fmt.Errorf("unsupported sensitive operation: %s", op.Operation)
 	}
@@ -1260,6 +1575,7 @@ func runCommand(req commandRequest, defaultTimeout time.Duration) (commandRespon
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, req.Argv[0], req.Argv[1:]...)
+	cmd.Dir = "/tmp"
 	if req.Stdin != "" {
 		cmd.Stdin = strings.NewReader(req.Stdin)
 	}

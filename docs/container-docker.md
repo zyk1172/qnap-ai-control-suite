@@ -1,32 +1,65 @@
 # Container Station / Docker 管理
 
-`0.2.6` 开始，QNAP AI Control Suite 增加了 Container Station / Docker 管理能力。这个能力由 NAS 端 agent 调用本机 Docker CLI，Mac 端 MCP 只负责传递受控工具请求。
+`0.3.0` 开始，QNAP AI Control Suite 的 Docker 能力从“查询和启停”扩展到接近完整的 Container Station / Docker CLI 控制。agent 仍然不经过 shell，而是用参数数组调用 Docker CLI。
 
 ![Container Docker tools](images/container-docker-tools.svg)
 
 ## 能做什么
 
-只读能力会直接执行：
+查询和诊断：
 
-- `nas_docker_info`：读取 Docker engine 版本和运行状态。
-- `nas_docker_containers`：列出所有容器，相当于受控的 `docker ps -a`。
+- `nas_docker_info`：Docker engine 版本和运行状态。
+- `nas_docker_containers`：列出所有容器。
 - `nas_docker_images`：列出镜像。
-- `nas_docker_inspect`：inspect 一个容器或镜像。
-- `nas_docker_logs`：读取容器日志，默认 200 行，最多 2000 行。
+- `nas_docker_inspect`：inspect 容器或镜像。
+- `nas_docker_logs`：读取容器日志。
+- `nas_docker_stats`：读取容器资源占用，默认 `--no-stream`。
 
-敏感能力必须确认：
+容器操作：
 
 - `nas_docker_action`：`start`、`stop`、`restart`、`pause`、`unpause`。
+- `nas_docker_run`：执行 `docker run`，需要确认。
+- `nas_docker_create`：执行 `docker create`，需要确认。
+- `nas_docker_remove`：执行 `docker rm`，需要确认。
+- `nas_docker_exec`：执行 `docker exec`。
+- `nas_docker_pull`：执行 `docker pull`。
+- `nas_docker_image_remove`：执行 `docker rmi`，需要确认。
+
+更底层的 Docker 能力：
+
+- `nas_docker_network`：执行 `docker network ...`，`rm/prune` 需要确认。
+- `nas_docker_volume`：执行 `docker volume ...`，`rm/prune` 需要确认。
+- `nas_docker_compose`：执行 `docker compose ...`，`down/rm` 需要确认。
+- `nas_docker_command`：受控通用入口，允许常见 Docker 子命令。
+
+## 确认策略
+
+为了减少使用阻力，普通启停、pull、exec、logs、stats、compose up/restart 不需要确认。只有最高风险的 Docker 操作需要确认：
+
+- `docker run`
+- `docker create`
+- `docker rm`
+- `docker rmi`
+- `docker system prune`
+- `docker volume rm/prune`
+- `docker network rm/prune`
+- `docker compose down/rm`
 
 ## 安全边界
 
-agent 没有开放任意 Docker 命令，也没有开放 shell。Docker 动作只允许固定子命令，并且容器名或 id 只允许字母、数字、`_`、`-`、`.`、`:`。
+agent 不开放 shell。所有 Docker 调用都使用参数数组，例如：
 
-`nas_docker_action` 在 `dry_run: false` 时不会直接执行，会返回待确认操作。确认短语正确后，`nas_confirm_operation` 才执行真实动作。
+```json
+{
+  "args": ["-d", "--name", "web", "nginx:latest"]
+}
+```
+
+不要传入一整段 shell 字符串，例如 `docker run ... && rm -rf ...`。这类输入不会被 shell 展开，但也不应该作为工具参数使用。
 
 ## Docker CLI 路径
 
-agent 默认查找这些路径：
+agent 默认查找常见 Container Station 路径：
 
 ```json
 [
@@ -40,13 +73,13 @@ agent 默认查找这些路径：
 ]
 ```
 
-如果你的 NAS 路径不同，编辑：
+如果路径不同，编辑：
 
 ```text
 /etc/config/qnap-ai-control-agent/config.json
 ```
 
-加入或修改：
+修改：
 
 ```json
 {
@@ -61,15 +94,6 @@ agent 默认查找这些路径：
 
 ## MCP 调用示例
 
-查看 Docker 状态：
-
-```json
-{
-  "tool": "nas_docker_info",
-  "arguments": {}
-}
-```
-
 列出容器：
 
 ```json
@@ -79,67 +103,80 @@ agent 默认查找这些路径：
 }
 ```
 
-查看某个容器日志：
+查看 stats：
 
 ```json
 {
-  "tool": "nas_docker_logs",
+  "tool": "nas_docker_stats",
+  "arguments": {}
+}
+```
+
+拉取镜像：
+
+```json
+{
+  "tool": "nas_docker_pull",
   "arguments": {
-    "name": "moviepilot",
-    "tail": 300
+    "args": ["nginx:latest"]
   }
 }
 ```
 
-先 dry-run 重启容器：
+执行容器内命令：
 
 ```json
 {
-  "tool": "nas_docker_action",
+  "tool": "nas_docker_exec",
   "arguments": {
-    "name": "moviepilot",
-    "action": "restart",
-    "dry_run": true,
-    "reason": "确认 Docker restart 命令"
+    "args": ["moviepilot", "python", "--version"]
   }
 }
 ```
 
-准备真实重启：
+创建并运行容器，需要确认：
 
 ```json
 {
-  "tool": "nas_docker_action",
+  "tool": "nas_docker_run",
   "arguments": {
-    "name": "moviepilot",
-    "action": "restart",
-    "reason": "应用配置后重启容器"
+    "args": ["-d", "--name", "web", "-p", "8080:80", "nginx:latest"],
+    "reason": "创建测试 Web 容器"
   }
 }
 ```
 
-返回示例：
+Docker Compose up：
 
 ```json
 {
-  "confirmation_required": true,
-  "operation": {
-    "id": "abc...",
-    "operation": "docker_action",
-    "summary": "restart Docker container moviepilot",
-    "confirmation_phrase": "CONFIRM abc..."
+  "tool": "nas_docker_compose",
+  "arguments": {
+    "args": ["-f", "/share/Container/app/docker-compose.yml", "up", "-d"]
   }
 }
 ```
 
-执行确认：
+Docker Compose down，需要确认：
+
+```json
+{
+  "tool": "nas_docker_compose",
+  "arguments": {
+    "args": ["-f", "/share/Container/app/docker-compose.yml", "down"],
+    "reason": "停止并移除 compose 项目"
+  }
+}
+```
+
+确认执行：
 
 ```json
 {
   "tool": "nas_confirm_operation",
   "arguments": {
-    "id": "abc...",
-    "confirmation_phrase": "CONFIRM abc..."
+    "id": "OPERATION_ID",
+    "confirmation_phrase": "CONFIRM OPERATION_ID"
   }
 }
 ```
@@ -157,7 +194,7 @@ agent 默认查找这些路径：
 - QPKG 运行用户没有权限访问 Docker socket。
 - Container Station 自身未启动完成。
 
-容器名报错：
+命令超时：
 
-- 使用 `nas_docker_containers` 复制返回里的容器 `Names` 或 `ID`。
-- 不要传 shell 片段、空格、通配符或管道符。
+- 构建、拉取、compose up 可能较慢，给工具传 `timeout_sec`。
+- `nas_docker_stats` 默认使用 `--no-stream`，如果传自定义 args，避免长期 streaming。

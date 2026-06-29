@@ -15,7 +15,7 @@
   </defs>
   <rect class="bg" width="1200" height="560"/>
   <text class="title" x="52" y="58">MCP tool catalog</text>
-  <text class="small" x="52" y="84">Read-only tools execute immediately. Sensitive tools prepare first and require confirmation.</text>
+  <text class="small" x="52" y="84">Most tools execute immediately. Only the five highest-risk operation classes require confirmation.</text>
 
   <rect class="safe" x="70" y="125" width="480" height="365"/>
   <text class="label" x="100" y="164">Read-only tools</text>
@@ -31,15 +31,15 @@
   <text class="mono" x="100" y="476">nas_docker_inspect / logs</text>
 
   <rect class="risk" x="650" y="125" width="480" height="365"/>
-  <text class="label" x="680" y="164">Sensitive tools</text>
+  <text class="label" x="680" y="164">Confirmation-required operations</text>
   <text class="mono" x="680" y="212">nas_file_write</text>
   <text class="small" x="860" y="212">write under allowed roots</text>
   <text class="mono" x="680" y="262">nas_command_run</text>
   <text class="small" x="860" y="262">allowlisted command only</text>
-  <text class="mono" x="680" y="312">nas_qpkg_action</text>
-  <text class="small" x="860" y="312">start / stop / restart</text>
-  <text class="mono" x="680" y="362">nas_docker_action</text>
-  <text class="small" x="860" y="362">container start / stop / restart</text>
+  <text class="mono" x="680" y="312">nas_docker_run / create</text>
+  <text class="small" x="860" y="312">new container execution</text>
+  <text class="mono" x="680" y="362">nas_docker_remove / rmi</text>
+  <text class="small" x="860" y="362">destructive container cleanup</text>
   <text class="mono" x="680" y="412">nas_prepare_operation</text>
   <text class="small" x="860" y="412">manual prepare path</text>
   <text class="mono" x="680" y="462">nas_confirm_operation</text>

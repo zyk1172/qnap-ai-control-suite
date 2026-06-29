@@ -2,37 +2,35 @@
 
 ## 为什么需要确认
 
-NAS 控制面可以影响下载器、媒体库、容器、套件和共享文件。为了避免模型误操作，MCP 桥接器默认把高风险操作拆成两步：
+NAS 控制面可以影响下载器、媒体库、容器、套件和共享文件。`0.3.0` 开始，MCP 桥接器尽量减少确认弹窗：普通查询、启停、日志、stats、pull、exec 默认直接执行；只有最高风险的 5 类操作需要 prepare / confirm。
 
-1. prepare：生成待确认操作。
-2. confirm：用户检查 summary 后再执行。
+## 需要确认的 5 类操作
 
-## 当前敏感操作
+- `file_write`：写 NAS 文件。
+- `command_run`：手动执行 allowlist 命令。
+- `docker_run_create`：`docker run` / `docker create`。
+- `docker_destroy`：`docker rm`、`docker rmi`、`docker system prune`、`docker volume rm/prune`、`docker network rm/prune`、`docker compose down/rm`。
+- `qpkg_install_remove`：QPKG `add`、`install_file`、`install_url`、`remove`、`update_all`。
 
-- 写文件：`file_write`
-- 执行 allowlist 命令：`command_run`
-- QPKG 启停重启：`qpkg_action`
-- Docker 容器启停、重启、暂停、恢复：`docker_action`
+## 不再强制确认的常用操作
 
-## 默认行为
+- QPKG `start`、`stop`、`restart`、`enable`、`disable`、`status`。
+- Docker `start`、`stop`、`restart`、`pause`、`unpause`。
+- Docker `pull`、`exec`、`logs`、`inspect`、`stats`。
+- Docker network / volume 的列表、创建、inspect。
+- Docker compose `up`、`restart`、`pull`、`logs`、`ps`。
 
-调用 `nas_qpkg_action` 且 `dry_run: false`：
+## 默认流程
 
-```json
-{
-  "name": "MoviePilot",
-  "action": "restart",
-  "reason": "应用配置后重启"
-}
-```
-
-Docker 容器动作同理。调用 `nas_docker_action` 且 `dry_run: false` 只会创建 `docker_action` 待确认操作：
+准备删除容器：
 
 ```json
 {
-  "name": "moviepilot",
-  "action": "restart",
-  "reason": "应用配置后重启容器"
+  "tool": "nas_docker_remove",
+  "arguments": {
+    "args": ["-f", "moviepilot"],
+    "reason": "移除旧容器"
+  }
 }
 ```
 
@@ -43,8 +41,8 @@ Docker 容器动作同理。调用 `nas_docker_action` 且 `dry_run: false` 只�
   "confirmation_required": true,
   "operation": {
     "id": "abc...",
-    "operation": "qpkg_action",
-    "summary": "restart QPKG MoviePilot",
+    "operation": "docker_destroy",
+    "summary": "docker destructive command: docker rm -f moviepilot",
     "confirmation_phrase": "CONFIRM abc...",
     "expires_at": "..."
   }
@@ -63,6 +61,18 @@ Docker 容器动作同理。调用 `nas_docker_action` 且 `dry_run: false` 只�
 }
 ```
 
+普通重启容器会直接执行：
+
+```json
+{
+  "tool": "nas_docker_action",
+  "arguments": {
+    "name": "moviepilot",
+    "action": "restart"
+  }
+}
+```
+
 ## 过期和审计
 
 - 待确认操作默认 10 分钟过期。
@@ -71,7 +81,7 @@ Docker 容器动作同理。调用 `nas_docker_action` 且 `dry_run: false` 只�
 
 ## 建议操作习惯
 
-- 破坏性操作先设置 `dry_run: true`。
+- 删除、安装、全量更新先设置 `dry_run: true`。
 - 确认前阅读 `summary` 和 `reason`。
 - 对文件写入先读原文件，再写入，再读回验证。
 - 不要把 `/bin/sh`、`/bin/bash`、`rm` 加入默认 allowlist。

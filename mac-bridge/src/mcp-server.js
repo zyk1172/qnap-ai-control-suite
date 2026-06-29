@@ -12,6 +12,7 @@ const tools = [
   tool("nas_capabilities", "Show allowed roots, allowlisted commands, profile, and confirmation policy."),
   tool("nas_system_overview", "Read host, uptime, uname, and disk overview from QNAP."),
   tool("nas_processes", "Read process list from QNAP through ps -ef."),
+  tool("nas_system_thermal", "Read QNAP CPU, system, disk, fan, and hwmon temperature information."),
   tool("nas_audit_tail", "Read recent QNAP AI Control audit log entries.", {
     lines: { type: "number", description: "Number of log lines, 1-500." }
   }),
@@ -41,12 +42,20 @@ const tools = [
     reason: { type: "string" }
   }, ["argv"]),
   tool("nas_qpkg_list", "List QNAP QPKG packages through qpkg_cli."),
-  tool("nas_qpkg_action", "Prepare or dry-run starting, stopping, or restarting a QNAP QPKG package. Non-dry-run actions require confirmation.", {
+  tool("nas_qpkg_action", "Start, stop, or restart a QNAP QPKG package. Use nas_qpkg_manage for install/remove/update workflows.", {
     name: { type: "string" },
     action: { type: "string", enum: ["start", "stop", "restart"] },
     dry_run: { type: "boolean" },
     reason: { type: "string" }
   }, ["name", "action"]),
+  tool("nas_qpkg_manage", "Manage QPKG packages: start, stop, restart, enable, disable, status, download, add, install_file, install_url, remove, clean, cancel, update_all. Install/remove/update actions require confirmation.", {
+    name: { type: "string" },
+    action: { type: "string", enum: ["start", "stop", "restart", "enable", "disable", "status", "download", "add", "install_file", "install_url", "remove", "clean", "cancel", "update_all"] },
+    path: { type: "string", description: "QPKG file path for install_file." },
+    url: { type: "string", description: "QPKG URL for install_url." },
+    dry_run: { type: "boolean" },
+    reason: { type: "string" }
+  }, ["action"]),
   tool("nas_docker_info", "Read QNAP Container Station / Docker engine version and runtime information."),
   tool("nas_docker_containers", "List Docker containers through Container Station / docker ps -a."),
   tool("nas_docker_images", "List Docker images through Container Station / docker images."),
@@ -57,19 +66,82 @@ const tools = [
     name: { type: "string", description: "Container name or id." },
     tail: { type: "number", description: "Number of lines, default 200, max 2000." }
   }, ["name"]),
-  tool("nas_docker_action", "Prepare or dry-run start, stop, restart, pause, or unpause for a Docker container. Non-dry-run actions require confirmation.", {
+  tool("nas_docker_action", "Start, stop, restart, pause, or unpause a Docker container.", {
     name: { type: "string", description: "Container name or id." },
     action: { type: "string", enum: ["start", "stop", "restart", "pause", "unpause"] },
     dry_run: { type: "boolean" },
     reason: { type: "string" }
   }, ["name", "action"]),
+  tool("nas_docker_command", "Run an allowlisted Docker subcommand with raw arguments and no shell. Highest-risk subcommands are prepared for confirmation.", {
+    subcommand: { type: "string", enum: ["run", "create", "exec", "pull", "push", "build", "images", "ps", "inspect", "logs", "stats", "top", "port", "diff", "start", "stop", "restart", "pause", "unpause", "kill", "rename", "update", "rm", "rmi", "tag", "save", "load", "cp", "commit", "export", "import", "history", "network", "volume", "system", "compose"] },
+    args: { type: "array", items: { type: "string" } },
+    timeout_sec: { type: "number" },
+    dry_run: { type: "boolean" },
+    reason: { type: "string" }
+  }, ["subcommand"]),
+  tool("nas_docker_run", "Prepare or dry-run docker run with raw docker run arguments. Non-dry-run requires confirmation.", {
+    args: { type: "array", items: { type: "string" }, description: "Arguments after docker run, for example ['-d','--name','web','nginx:latest']." },
+    timeout_sec: { type: "number" },
+    dry_run: { type: "boolean" },
+    reason: { type: "string" }
+  }, ["args"]),
+  tool("nas_docker_create", "Prepare or dry-run docker create with raw docker create arguments. Non-dry-run requires confirmation.", {
+    args: { type: "array", items: { type: "string" } },
+    timeout_sec: { type: "number" },
+    dry_run: { type: "boolean" },
+    reason: { type: "string" }
+  }, ["args"]),
+  tool("nas_docker_remove", "Prepare or dry-run docker rm. Non-dry-run requires confirmation.", {
+    args: { type: "array", items: { type: "string" }, description: "Arguments after docker rm, for example ['-f','container_name']." },
+    timeout_sec: { type: "number" },
+    dry_run: { type: "boolean" },
+    reason: { type: "string" }
+  }, ["args"]),
+  tool("nas_docker_exec", "Run docker exec with raw arguments and no shell wrapping.", {
+    args: { type: "array", items: { type: "string" }, description: "Arguments after docker exec." },
+    timeout_sec: { type: "number" },
+    dry_run: { type: "boolean" }
+  }, ["args"]),
+  tool("nas_docker_pull", "Pull a Docker image.", {
+    args: { type: "array", items: { type: "string" }, description: "Arguments after docker pull, usually ['image:tag']." },
+    timeout_sec: { type: "number" },
+    dry_run: { type: "boolean" }
+  }, ["args"]),
+  tool("nas_docker_image_remove", "Prepare or dry-run docker rmi. Non-dry-run requires confirmation.", {
+    args: { type: "array", items: { type: "string" } },
+    timeout_sec: { type: "number" },
+    dry_run: { type: "boolean" },
+    reason: { type: "string" }
+  }, ["args"]),
+  tool("nas_docker_network", "Manage Docker networks with raw docker network arguments. remove/prune requires confirmation.", {
+    args: { type: "array", items: { type: "string" }, description: "Arguments after docker network." },
+    timeout_sec: { type: "number" },
+    dry_run: { type: "boolean" },
+    reason: { type: "string" }
+  }, ["args"]),
+  tool("nas_docker_volume", "Manage Docker volumes with raw docker volume arguments. remove/prune requires confirmation.", {
+    args: { type: "array", items: { type: "string" }, description: "Arguments after docker volume." },
+    timeout_sec: { type: "number" },
+    dry_run: { type: "boolean" },
+    reason: { type: "string" }
+  }, ["args"]),
+  tool("nas_docker_compose", "Run docker compose with raw compose arguments. down/rm requires confirmation.", {
+    args: { type: "array", items: { type: "string" }, description: "Arguments after docker compose, for example ['-f','compose.yml','up','-d']." },
+    timeout_sec: { type: "number" },
+    dry_run: { type: "boolean" },
+    reason: { type: "string" }
+  }, ["args"]),
+  tool("nas_docker_stats", "Read Docker stats with --no-stream by default unless custom args are supplied.", {
+    args: { type: "array", items: { type: "string" } },
+    timeout_sec: { type: "number" }
+  }),
   tool("nas_qnap_getcfg", "Read a QNAP config value with getcfg. File is limited to /etc/config/*.conf.", {
     section: { type: "string" },
     key: { type: "string" },
     file: { type: "string", description: "Defaults to /etc/config/qpkg.conf." }
   }, ["section", "key"]),
-  tool("nas_prepare_operation", "Prepare a sensitive operation manually. Use for file_write, command_run, qpkg_action, or docker_action.", {
-    operation: { type: "string", enum: ["file_write", "command_run", "qpkg_action", "docker_action"] },
+  tool("nas_prepare_operation", "Prepare a sensitive operation manually. Use for file_write, command_run, docker_run_create, docker_destroy, or qpkg_install_remove.", {
+    operation: { type: "string", enum: ["file_write", "command_run", "docker_run_create", "docker_destroy", "qpkg_install_remove"] },
     arguments: { type: "object" },
     reason: { type: "string" }
   }, ["operation", "arguments"]),
@@ -105,7 +177,7 @@ async function handleMessage(msg) {
       return {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "qnap-ai-control-mcp", version: "0.2.6" }
+        serverInfo: { name: "qnap-ai-control-mcp", version: "0.3.0" }
       };
     case "notifications/initialized":
       return {};
@@ -129,6 +201,8 @@ async function callTool(name, args) {
       return textResult(await request("GET", "/v1/system/overview"));
     case "nas_processes":
       return textResult(await request("GET", "/v1/system/processes"));
+    case "nas_system_thermal":
+      return textResult(await request("GET", "/v1/system/thermal"));
     case "nas_audit_tail": {
       const lines = args.lines ? `?lines=${encodeURIComponent(args.lines)}` : "";
       return textResult(await request("GET", `/v1/audit/tail${lines}`));
@@ -174,8 +248,20 @@ async function callTool(name, args) {
         action: args.action,
         dry_run: Boolean(args.dry_run)
       };
-      if (payload.dry_run) return textResult(await request("POST", "/v1/qnap/qpkg/action", payload));
-      return preparedResult(await prepare("qpkg_action", payload, args.reason));
+      return textResult(await request("POST", "/v1/qnap/qpkg/action", payload));
+    }
+    case "nas_qpkg_manage": {
+      const payload = {
+        name: args.name,
+        action: args.action,
+        path: args.path,
+        url: args.url,
+        dry_run: Boolean(args.dry_run)
+      };
+      if (!payload.dry_run && isRiskyQpkgManage(payload.action)) {
+        return preparedResult(await prepare("qpkg_install_remove", payload, args.reason));
+      }
+      return textResult(await request("POST", "/v1/qnap/qpkg/manage", payload));
     }
     case "nas_docker_info":
       return textResult(await request("GET", "/v1/docker/info"));
@@ -198,8 +284,31 @@ async function callTool(name, args) {
         action: args.action,
         dry_run: Boolean(args.dry_run)
       };
-      if (payload.dry_run) return textResult(await request("POST", "/v1/docker/action", payload));
-      return preparedResult(await prepare("docker_action", payload, args.reason));
+      return textResult(await request("POST", "/v1/docker/action", payload));
+    }
+    case "nas_docker_command":
+      return dockerCommandResult(args.subcommand, args.args || [], args.timeout_sec, Boolean(args.dry_run), args.reason);
+    case "nas_docker_run":
+      return dockerCommandResult("run", args.args || [], args.timeout_sec, Boolean(args.dry_run), args.reason);
+    case "nas_docker_create":
+      return dockerCommandResult("create", args.args || [], args.timeout_sec, Boolean(args.dry_run), args.reason);
+    case "nas_docker_remove":
+      return dockerCommandResult("rm", args.args || [], args.timeout_sec, Boolean(args.dry_run), args.reason);
+    case "nas_docker_exec":
+      return dockerCommandResult("exec", args.args || [], args.timeout_sec, Boolean(args.dry_run), args.reason);
+    case "nas_docker_pull":
+      return dockerCommandResult("pull", args.args || [], args.timeout_sec, Boolean(args.dry_run), args.reason);
+    case "nas_docker_image_remove":
+      return dockerCommandResult("rmi", args.args || [], args.timeout_sec, Boolean(args.dry_run), args.reason);
+    case "nas_docker_network":
+      return dockerCommandResult("network", args.args || [], args.timeout_sec, Boolean(args.dry_run), args.reason);
+    case "nas_docker_volume":
+      return dockerCommandResult("volume", args.args || [], args.timeout_sec, Boolean(args.dry_run), args.reason);
+    case "nas_docker_compose":
+      return dockerCommandResult("compose", args.args || [], args.timeout_sec, Boolean(args.dry_run), args.reason);
+    case "nas_docker_stats": {
+      const statsArgs = args.args && args.args.length ? args.args : ["--no-stream"];
+      return dockerCommandResult("stats", statsArgs, args.timeout_sec, false, args.reason);
     }
     case "nas_qnap_getcfg":
       return textResult(await request("POST", "/v1/qnap/getcfg", {
@@ -227,6 +336,35 @@ async function prepare(operation, argumentsPayload, reason) {
     arguments: argumentsPayload,
     reason
   });
+}
+
+async function dockerCommandResult(subcommand, args = [], timeout_sec, dry_run = false, reason) {
+  const payload = {
+    subcommand,
+    args,
+    timeout_sec,
+    dry_run
+  };
+  if (!dry_run && isRiskyDockerCommand(subcommand, args)) {
+    const operation = subcommand === "run" || subcommand === "create" ? "docker_run_create" : "docker_destroy";
+    return preparedResult(await prepare(operation, payload, reason));
+  }
+  return textResult(await request("POST", "/v1/docker/command", payload));
+}
+
+function isRiskyDockerCommand(subcommand, args = []) {
+  if (subcommand === "run" || subcommand === "create") return true;
+  if (subcommand === "rm" || subcommand === "rmi") return true;
+  if (subcommand === "system") return args.includes("prune");
+  if (subcommand === "volume" || subcommand === "network") {
+    return args.includes("rm") || args.includes("prune");
+  }
+  if (subcommand === "compose") return args.includes("down") || args.includes("rm");
+  return false;
+}
+
+function isRiskyQpkgManage(action) {
+  return ["add", "install_file", "install_url", "remove", "update_all"].includes(action);
 }
 
 function preparedResult(operation) {
