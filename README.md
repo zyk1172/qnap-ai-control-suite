@@ -16,7 +16,7 @@ QNAP AI Control Suite 是一个 NAS 端控制代理加 Mac 端 MCP 桥接器。
 
 ## 功能
 
-当前 `0.3.2` 版本包含：
+当前 `0.3.3` 版本包含：
 
 - NAS 健康检查和能力清单
 - WebUI token 保存、连接测试、能力读取和 MCP 配置生成
@@ -29,7 +29,8 @@ QNAP AI Control Suite 是一个 NAS 端控制代理加 Mac 端 MCP 桥接器。
 - allowlist 命令执行，不经过 shell
 - JSONL 审计日志
 - 敏感操作 prepare / confirm 确认流
-- Mac MCP 工具集，支持 Codex/OpenClaw/Hermes 接入
+- NAS 原生 Streamable HTTP MCP 端点，支持 MoviePilot 等远程 MCP 客户端接入
+- Mac MCP 工具集，继续支持 Codex/OpenClaw/Hermes 的 stdio 接入
 
 ![Tool catalog](docs/images/tool-catalog.svg)
 
@@ -54,8 +55,8 @@ make -C tools/QDK/src
 输出：
 
 ```text
-dist/QnapAIControl_0.3.2.qpkg
-dist/QnapAIControl_0.3.2.qpkg.md5
+dist/QnapAIControl_0.3.3.qpkg
+dist/QnapAIControl_0.3.3.qpkg.md5
 ```
 
 没有 QDK 时，脚本会生成 staging archive，用来检查包结构，但不是正式可安装 `.qpkg`。
@@ -82,6 +83,14 @@ node /path/to/qnap-ai-control-suite/mac-bridge/src/mcp-server.js
 QACS_BASE_URL=http://NAS_IP:8756
 QACS_TOKEN=从 NAS /etc/config/qnap-ai-control-agent/initial-token.txt 读取
 ```
+
+远程 MCP 客户端可直接连接 NAS agent：
+
+```text
+http://NAS_IP:8756/mcp
+```
+
+使用 `Authorization: Bearer <token>` 鉴权。MoviePilot 示例见 [MoviePilot MCP 接入](docs/moviepilot-mcp.md)。
 
 ## 敏感操作确认
 
@@ -123,6 +132,7 @@ QACS_TOKEN=从 NAS /etc/config/qnap-ai-control-agent/initial-token.txt 读取
 - [安装和部署](docs/install.md)
 - [WebUI 使用教程](docs/webui.md)
 - [MCP 客户端配置](docs/mcp-clients.md)
+- [MoviePilot MCP 接入](docs/moviepilot-mcp.md)
 - [Hermes 和 OpenClaw 接入 MCP](docs/hermes-openclaw-mcp.md)
 - [Container Station / Docker 管理](docs/container-docker.md)
 - [敏感操作确认机制](docs/confirmations.md)

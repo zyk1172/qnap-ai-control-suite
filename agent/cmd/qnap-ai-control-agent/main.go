@@ -158,10 +158,10 @@ const indexPage = `<!doctype html>
           </div>
         </div>
         <div id="tab-mcp" class="hidden">
-          <p>Mac 端 MCP bridge 使用同一个 NAS 地址和 token。下面的配置会根据当前 WebUI 地址生成，填到 Codex、OpenClaw 或 Hermes 的 MCP server 配置里。</p>
+          <p>NAS 原生 Streamable HTTP MCP 使用同一个 NAS 地址和 token，可直接接入 MoviePilot。Mac 的 stdio bridge 仍保留给 Codex、OpenClaw 和 Hermes。</p>
           <div class="row">
-            <button id="copyEnv">复制环境变量</button>
-            <button id="copyJson">复制 MCP JSON</button>
+            <button id="copyMoviePilot">复制 MoviePilot 配置</button>
+            <button id="copyStdio">复制 stdio 配置</button>
           </div>
           <pre id="mcpConfig"></pre>
           <div class="guide">
@@ -171,25 +171,25 @@ const indexPage = `<!doctype html>
               <text x="84" y="80" fill="#f5f7fb" text-anchor="middle" font-size="17">Codex</text>
               <text x="84" y="104" fill="#bdc8d5" text-anchor="middle" font-size="12">OpenClaw/Hermes</text>
               <rect x="214" y="46" width="132" height="78" rx="8" fill="#172331" stroke="#40556c"/>
-              <text x="280" y="80" fill="#f5f7fb" text-anchor="middle" font-size="17">MCP bridge</text>
-              <text x="280" y="104" fill="#bdc8d5" text-anchor="middle" font-size="12">mac-bridge</text>
+              <text x="280" y="80" fill="#f5f7fb" text-anchor="middle" font-size="17">MCP endpoint</text>
+              <text x="280" y="104" fill="#bdc8d5" text-anchor="middle" font-size="12">Streamable HTTP</text>
               <rect x="416" y="46" width="120" height="78" rx="8" fill="#172331" stroke="#40556c"/>
               <text x="476" y="80" fill="#f5f7fb" text-anchor="middle" font-size="17">NAS agent</text>
               <text x="476" y="104" fill="#bdc8d5" text-anchor="middle" font-size="12">8756 API</text>
               <path d="M146 86 H208" stroke="#36d399" stroke-width="3" marker-end="url(#arrow2)"/>
               <path d="M348 86 H410" stroke="#36d399" stroke-width="3" marker-end="url(#arrow2)"/>
-              <text x="280" y="170" fill="#bdc8d5" text-anchor="middle" font-size="15">MCP 工具调用会转成受控 NAS API 请求</text>
+              <text x="280" y="170" fill="#bdc8d5" text-anchor="middle" font-size="15">MCP 工具调用会复用受控 NAS API</text>
             </svg>
             <div class="card">
-              <h3>Agent 添加 MCP</h3>
+              <h3>MoviePilot 添加 MCP</h3>
               <ul>
                 <li>server 名称填 <code>qnap-ai-control</code>。</li>
-                <li>command 填 <code>node</code>。</li>
-                <li>args 填 Mac 上 <code>mac-bridge/src/mcp-server.js</code> 的绝对路径。</li>
-                <li>env 填 <code>QACS_BASE_URL</code> 和 <code>QACS_TOKEN</code>。</li>
+                <li>transport 选择 <code>streamable_http</code>。</li>
+                <li>url 填 <code>http://NAS_IP:8756/mcp</code>。</li>
+                <li>headers 填 <code>Authorization: Bearer QACS_TOKEN</code>。</li>
                 <li>重载 agent 后确认工具列表出现 <code>nas_docker_containers</code>。</li>
               </ul>
-              <pre>node /path/to/qnap-ai-control-suite/mac-bridge/src/mcp-server.js</pre>
+              <pre>POST http://NAS_IP:8756/mcp</pre>
             </div>
           </div>
         </div>
@@ -262,11 +262,16 @@ POST /v1/operations/confirm</pre>
       connStatus.querySelector('span:last-child').textContent = text;
     }
     function authHeaders(){ return { 'Authorization': 'Bearer ' + token() }; }
-    function updateMcpConfig(){
+    function moviePilotConfig(){
       const tok = token() || 'REPLACE_WITH_TOKEN';
-      const env = 'QACS_BASE_URL=' + baseUrl + '\nQACS_TOKEN=' + tok;
-      const json = JSON.stringify({mcpServers:{'qnap-ai-control':{command:'node',args:['/path/to/qnap-ai-control-suite/mac-bridge/src/mcp-server.js'],env:{QACS_BASE_URL:baseUrl,QACS_TOKEN:tok}}}}, null, 2);
-      mcpConfig.textContent = env + '\n\n' + json;
+      return {id:'qnap-ai-control',name:'QNAP AI Control',enabled:true,transport:'streamable_http',url:baseUrl + '/mcp',headers:{Authorization:'Bearer ' + tok},timeout:30,tool_prefix:'nas',require_admin:true};
+    }
+    function stdioConfig(){
+      const tok = token() || 'REPLACE_WITH_TOKEN';
+      return {mcpServers:{'qnap-ai-control':{command:'node',args:['/path/to/qnap-ai-control-suite/mac-bridge/src/mcp-server.js'],env:{QACS_BASE_URL:baseUrl,QACS_TOKEN:tok}}}};
+    }
+    function updateMcpConfig(){
+      mcpConfig.textContent = 'MoviePilot Streamable HTTP:\n' + JSON.stringify(moviePilotConfig(), null, 2) + '\n\nMac stdio bridge:\n' + JSON.stringify(stdioConfig(), null, 2);
     }
     async function copyText(text){
       await navigator.clipboard.writeText(text);
@@ -313,8 +318,8 @@ POST /v1/operations/confirm</pre>
         setStatus('bad', '能力读取失败');
       }
     };
-    document.getElementById('copyEnv').onclick = () => copyText('QACS_BASE_URL=' + baseUrl + '\nQACS_TOKEN=' + (token() || 'REPLACE_WITH_TOKEN'));
-    document.getElementById('copyJson').onclick = () => copyText(JSON.stringify({mcpServers:{'qnap-ai-control':{command:'node',args:['/path/to/qnap-ai-control-suite/mac-bridge/src/mcp-server.js'],env:{QACS_BASE_URL:baseUrl,QACS_TOKEN:token() || 'REPLACE_WITH_TOKEN'}}}}, null, 2));
+    document.getElementById('copyMoviePilot').onclick = () => copyText(JSON.stringify(moviePilotConfig(), null, 2));
+    document.getElementById('copyStdio').onclick = () => copyText(JSON.stringify(stdioConfig(), null, 2));
     document.querySelectorAll('.tabs button').forEach(btn => btn.onclick = () => {
       document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
@@ -339,6 +344,7 @@ type Config struct {
 
 type Server struct {
 	cfg       Config
+	api       http.Handler
 	auditMu   sync.Mutex
 	pending   map[string]PendingOperation
 	pendingMu sync.Mutex
@@ -481,36 +487,48 @@ func main() {
 	hostname, _ := os.Hostname()
 	s := &Server{cfg: cfg, pending: map[string]PendingOperation{}, started: time.Now(), hostname: hostname}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleIndex)
-	mux.HandleFunc("/v1/health", s.withAuth(s.handleHealth))
-	mux.HandleFunc("/v1/capabilities", s.withAuth(s.handleCapabilities))
-	mux.HandleFunc("/v1/system/overview", s.withAuth(s.handleSystemOverview))
-	mux.HandleFunc("/v1/system/processes", s.withAuth(s.handleSystemProcesses))
-	mux.HandleFunc("/v1/system/thermal", s.withAuth(s.handleSystemThermal))
-	mux.HandleFunc("/v1/audit/tail", s.withAuth(s.handleAuditTail))
-	mux.HandleFunc("/v1/files/list", s.withAuth(s.handleFileList))
-	mux.HandleFunc("/v1/files/stat", s.withAuth(s.handleFileStat))
-	mux.HandleFunc("/v1/files/read", s.withAuth(s.handleFileRead))
-	mux.HandleFunc("/v1/files/write", s.withAuth(s.handleFileWrite))
-	mux.HandleFunc("/v1/command/run", s.withAuth(s.handleCommandRun))
-	mux.HandleFunc("/v1/qnap/qpkg", s.withAuth(s.handleQpkgList))
-	mux.HandleFunc("/v1/qnap/qpkg/action", s.withAuth(s.handleQpkgAction))
-	mux.HandleFunc("/v1/qnap/qpkg/manage", s.withAuth(s.handleQpkgManage))
-	mux.HandleFunc("/v1/qnap/getcfg", s.withAuth(s.handleGetcfg))
-	mux.HandleFunc("/v1/docker/info", s.withAuth(s.handleDockerInfo))
-	mux.HandleFunc("/v1/docker/containers", s.withAuth(s.handleDockerContainers))
-	mux.HandleFunc("/v1/docker/images", s.withAuth(s.handleDockerImages))
-	mux.HandleFunc("/v1/docker/inspect", s.withAuth(s.handleDockerInspect))
-	mux.HandleFunc("/v1/docker/logs", s.withAuth(s.handleDockerLogs))
-	mux.HandleFunc("/v1/docker/action", s.withAuth(s.handleDockerAction))
-	mux.HandleFunc("/v1/docker/command", s.withAuth(s.handleDockerCommand))
-	mux.HandleFunc("/v1/operations/prepare", s.withAuth(s.handlePrepareOperation))
-	mux.HandleFunc("/v1/operations/confirm", s.withAuth(s.handleConfirmOperation))
-	mux.HandleFunc("/v1/operations/pending", s.withAuth(s.handlePendingOperations))
+	mux := s.routes()
 
 	log.Printf("qnap-ai-control-agent listening on %s", cfg.Listen)
 	log.Fatal(http.ListenAndServe(cfg.Listen, mux))
+}
+
+// routes keeps the business API private to the agent while allowing the MCP
+// adapter to reuse the same validation, execution, and audit paths.
+func (s *Server) routes() http.Handler {
+	api := http.NewServeMux()
+	api.HandleFunc("/v1/health", s.handleHealth)
+	api.HandleFunc("/v1/capabilities", s.handleCapabilities)
+	api.HandleFunc("/v1/system/overview", s.handleSystemOverview)
+	api.HandleFunc("/v1/system/processes", s.handleSystemProcesses)
+	api.HandleFunc("/v1/system/thermal", s.handleSystemThermal)
+	api.HandleFunc("/v1/audit/tail", s.handleAuditTail)
+	api.HandleFunc("/v1/files/list", s.handleFileList)
+	api.HandleFunc("/v1/files/stat", s.handleFileStat)
+	api.HandleFunc("/v1/files/read", s.handleFileRead)
+	api.HandleFunc("/v1/files/write", s.handleFileWrite)
+	api.HandleFunc("/v1/command/run", s.handleCommandRun)
+	api.HandleFunc("/v1/qnap/qpkg", s.handleQpkgList)
+	api.HandleFunc("/v1/qnap/qpkg/action", s.handleQpkgAction)
+	api.HandleFunc("/v1/qnap/qpkg/manage", s.handleQpkgManage)
+	api.HandleFunc("/v1/qnap/getcfg", s.handleGetcfg)
+	api.HandleFunc("/v1/docker/info", s.handleDockerInfo)
+	api.HandleFunc("/v1/docker/containers", s.handleDockerContainers)
+	api.HandleFunc("/v1/docker/images", s.handleDockerImages)
+	api.HandleFunc("/v1/docker/inspect", s.handleDockerInspect)
+	api.HandleFunc("/v1/docker/logs", s.handleDockerLogs)
+	api.HandleFunc("/v1/docker/action", s.handleDockerAction)
+	api.HandleFunc("/v1/docker/command", s.handleDockerCommand)
+	api.HandleFunc("/v1/operations/prepare", s.handlePrepareOperation)
+	api.HandleFunc("/v1/operations/confirm", s.handleConfirmOperation)
+	api.HandleFunc("/v1/operations/pending", s.handlePendingOperations)
+	s.api = api
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleIndex)
+	mux.Handle("/v1/", s.withAuthHandler(api))
+	mux.HandleFunc("/mcp", s.withAuth(s.handleMCP))
+	return mux
 }
 
 func loadConfig(path string) (Config, error) {
@@ -586,6 +604,10 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
+	return s.withAuthHandler(http.HandlerFunc(next))
+}
+
+func (s *Server) withAuthHandler(next http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") == "" || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 			writeError(w, http.StatusUnauthorized, "missing bearer token")
@@ -597,7 +619,7 @@ func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request)) http.Ha
 			writeError(w, http.StatusUnauthorized, "invalid bearer token")
 			return
 		}
-		next(w, r)
+		next.ServeHTTP(w, r)
 	}
 }
 
@@ -1021,7 +1043,9 @@ func (s *Server) runQpkgManage(req qpkgManageRequest) (commandResponse, error) {
 		if err != nil {
 			return commandResponse{}, err
 		}
-		argv = append(argv, "-m", clean, "-K")
+		// QTS may otherwise only inspect a same-name package instead of applying
+		// the requested manual install or upgrade.
+		argv = append(argv, "-m", clean, "-K", "-M")
 		timeout = 600
 	case "install_url":
 		if req.URL == "" {

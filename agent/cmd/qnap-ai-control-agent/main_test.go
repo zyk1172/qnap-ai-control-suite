@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPathWithinRoot(t *testing.T) {
@@ -119,6 +124,26 @@ func TestQpkgInstallRemoveClassification(t *testing.T) {
 	}
 }
 
+func TestQpkgInstallFileUsesMustInstall(t *testing.T) {
+	root := t.TempDir()
+	pkg := filepath.Join(root, "example.qpkg")
+	if err := os.WriteFile(pkg, []byte("package"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{cfg: Config{
+		AllowedRoots:    []string{root},
+		AllowedCommands: []string{"/sbin/qpkg_cli"},
+		CommandTimeout:  time.Second,
+	}}
+	response, err := s.runQpkgManage(qpkgManageRequest{Action: "install_file", Path: pkg, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(response.Argv, " "), " -M") {
+		t.Fatalf("install argv does not include --must: %#v", response.Argv)
+	}
+}
+
 func TestAllowedDockerSubcommands(t *testing.T) {
 	for _, sub := range []string{"run", "exec", "pull", "compose", "network", "volume", "system"} {
 		if !allowedDockerSubcommand(sub) {
@@ -220,4 +245,99 @@ Enable = TRUE
 	if packages[1]["Name"] != "Container Station" {
 		t.Fatalf("unexpected second package: %#v", packages[1])
 	}
+}
+
+func TestMCPRequiresBearerToken(t *testing.T) {
+	_, handler := newMCPTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestMCPInitializeAndListTools(t *testing.T) {
+	_, handler := newMCPTestServer(t)
+	initialize := callMCP(t, handler, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}`)
+	result := initialize["result"].(map[string]any)
+	if result["protocolVersion"] != mcpProtocolVersion {
+		t.Fatalf("protocolVersion = %v", result["protocolVersion"])
+	}
+
+	tools := callMCP(t, handler, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+	toolList := tools["result"].(map[string]any)["tools"].([]any)
+	if len(toolList) < 30 {
+		t.Fatalf("tool count = %d, want at least 30", len(toolList))
+	}
+	for _, item := range toolList {
+		schema := item.(map[string]any)["inputSchema"].(map[string]any)
+		if schema["type"] != "object" {
+			t.Fatalf("input schema type = %v, want object", schema["type"])
+		}
+	}
+}
+
+func TestMCPHealthAndDestructiveDockerPreparation(t *testing.T) {
+	s, handler := newMCPTestServer(t)
+	docker := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(docker, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	s.cfg.DockerPaths = []string{docker}
+
+	health := callMCP(t, handler, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"nas_health","arguments":{}}}`)
+	healthText := toolResultText(t, health)
+	if !strings.Contains(healthText, `"ok": true`) {
+		t.Fatalf("health result = %s", healthText)
+	}
+
+	prepared := callMCP(t, handler, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"nas_docker_run","arguments":{"args":["--name","test","alpine:latest"]}}}`)
+	preparedText := toolResultText(t, prepared)
+	if !strings.Contains(preparedText, `"confirmation_required": true`) {
+		t.Fatalf("docker run bypassed confirmation: %s", preparedText)
+	}
+	if len(s.pending) != 1 {
+		t.Fatalf("pending operations = %d, want 1", len(s.pending))
+	}
+}
+
+func newMCPTestServer(t *testing.T) (*Server, http.Handler) {
+	t.Helper()
+	s := &Server{
+		cfg: Config{
+			TokenSHA256:     hashToken("test-token"),
+			AllowedRoots:    []string{t.TempDir()},
+			AllowedCommands: []string{"/bin/echo"},
+			CommandTimeout:  time.Second,
+			TimeoutSeconds:  1,
+		},
+		pending:  map[string]PendingOperation{},
+		started:  time.Now(),
+		hostname: "test-nas",
+	}
+	return s, s.routes()
+}
+
+func callMCP(t *testing.T, handler http.Handler, body string) map[string]any {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("MCP status = %d: %s", rec.Code, rec.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+func toolResultText(t *testing.T, response map[string]any) string {
+	t.Helper()
+	result := response["result"].(map[string]any)
+	content := result["content"].([]any)
+	return content[0].(map[string]any)["text"].(string)
 }

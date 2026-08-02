@@ -2,7 +2,7 @@
 
 ## 为什么需要确认
 
-NAS 控制面可以影响下载器、媒体库、容器、套件和共享文件。`0.3.2` 开始，MCP 桥接器进一步减少确认弹窗：普通查询、启停、日志、stats、pull、exec、写文件和 allowlist 命令默认直接执行；只有最高风险的 3 类操作需要 prepare / confirm。
+NAS 控制面可以影响下载器、媒体库、容器、套件和共享文件。`0.3.3` 的 Mac stdio bridge 和 NAS 原生 HTTP MCP 都保持相同确认策略：普通查询、启停、日志、stats、pull、exec、写文件和 allowlist 命令默认直接执行；只有最高风险的 3 类操作需要 prepare / confirm。
 
 ## 需要确认的 3 类操作
 

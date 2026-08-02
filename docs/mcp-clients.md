@@ -1,6 +1,12 @@
 # MCP 客户端配置
 
-这篇文档说明 Codex、OpenClaw、Hermes 这类 agent 如何把 QNAP AI Control Suite 加成 MCP server。NAS 端负责真实操作，Mac 端 `mac-bridge` 负责 stdio MCP 协议。
+这篇文档说明 Codex、OpenClaw、Hermes 这类 agent 如何把 QNAP AI Control Suite 加成 MCP server。NAS 端负责真实操作；Mac 客户端可使用 `mac-bridge` 的 stdio MCP，支持 HTTP MCP 的客户端可直接连接 NAS agent。
+
+## 远程 Streamable HTTP MCP
+
+`0.3.3` 起可直接使用 `http://NAS_IP:8756/mcp`，并在请求头传入 `Authorization: Bearer <QACS_TOKEN>`。这适用于 MoviePilot 等运行在 NAS 或局域网内的客户端，不需要 Node.js 或 Mac bridge。
+
+MoviePilot 的完整配置见 [MoviePilot MCP 接入](moviepilot-mcp.md)。
 
 ## 前置条件
 

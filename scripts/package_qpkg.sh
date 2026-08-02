@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ARCH="${1:-amd64}"
 QPKG_ARCH="${QPKG_ARCH:-generic}"
+QPKG_VER="$(awk -F'"' '/^QPKG_VER=/{print $2; exit}' "$ROOT/qpkg/qpkg.cfg")"
 BUILD_DIR="$ROOT/build/qpkg"
 QDK_DIR="${QDK_DIR:-$ROOT/tools/QDK/shared}"
 QBUILD_BIN="${QBUILD_BIN:-}"
@@ -97,8 +98,8 @@ if [ -n "$QBUILD_BIN" ]; then
   fi
   find "$ROOT/dist" -maxdepth 1 -name "*.qpkg" -print
 else
-  tar -C "$BUILD_DIR" -czf "$ROOT/dist/QnapAIControl-0.2.0-linux-$ARCH.qpkg-staging.tar.gz" .
+  tar -C "$BUILD_DIR" -czf "$ROOT/dist/QnapAIControl-$QPKG_VER-linux-$ARCH.qpkg-staging.tar.gz" .
   echo "qbuild not found; wrote staging archive:"
-  echo "$ROOT/dist/QnapAIControl-0.2.0-linux-$ARCH.qpkg-staging.tar.gz"
+  echo "$ROOT/dist/QnapAIControl-$QPKG_VER-linux-$ARCH.qpkg-staging.tar.gz"
   echo "Install QNAP QDK and rerun this script to produce a real .qpkg."
 fi
