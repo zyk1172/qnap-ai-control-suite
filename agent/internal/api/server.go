@@ -750,7 +750,7 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request, shell bool) {
 			if path == "" {
 				path = detectShell()
 			}
-			if path == "" {
+			if !validShell(path) {
 				s.fail(w, r, 503, "shell_unavailable", "no supported shell was found", nil)
 				return
 			}
@@ -787,6 +787,13 @@ func detectShell() string {
 		}
 	}
 	return ""
+}
+func validShell(path string) bool {
+	if !filepath.IsAbs(path) {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Mode()&0111 != 0
 }
 func (s *Server) run(r *http.Request, argv []string, req qexec.Request) (qexec.Result, error) {
 	if len(argv) == 0 {

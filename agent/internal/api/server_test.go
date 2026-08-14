@@ -85,6 +85,14 @@ func TestShellSupportsExplicitShellAndScript(t *testing.T) {
 	}
 }
 
+func TestShellRejectsNonExecutableInterpreter(t *testing.T) {
+	s, token := testServer(t)
+	w := request(t, s, token, http.MethodPost, "/v1/shell", `{"shell":"relative-shell","script":"echo no"}`)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "shell_unavailable") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestStructuredSystemResourcesAndJobs(t *testing.T) {
 	s, token := testServer(t)
 	w := request(t, s, token, http.MethodGet, "/v1/system/resources", "")
