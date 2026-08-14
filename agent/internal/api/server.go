@@ -1213,14 +1213,10 @@ func (s *Server) qpkgManage(w http.ResponseWriter, r *http.Request) {
 	s.respondCommand(w, r, result, err)
 }
 func (s *Server) auditTail(w http.ResponseWriter, r *http.Request) {
-	b, err := os.ReadFile(s.Config.Audit.Path)
+	lines, err := logs.TailPath(s.Config.Audit.Path, 200)
 	if err != nil {
 		s.fail(w, r, 500, "audit_read_failed", err.Error(), nil)
 		return
-	}
-	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
-	if len(lines) > 200 {
-		lines = lines[len(lines)-200:]
 	}
 	s.ok(w, r, map[string]any{"lines": lines})
 }

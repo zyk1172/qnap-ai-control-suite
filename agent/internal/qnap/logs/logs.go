@@ -107,3 +107,6 @@ func tail(path string, limit int, maxBytes int64) ([]string, error) {
 	}
 	return lines, nil
 }
+
+// TailPath reads at most 2 MiB from a known local log path.
+func TailPath(path string, limit int) ([]string, error) { return tail(path, limit, 2*1024*1024) }
