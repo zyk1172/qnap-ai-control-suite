@@ -556,6 +556,13 @@ func (s *Server) storageRoute(w http.ResponseWriter, r *http.Request) bool {
 		}
 		return true
 	}
+	if strings.HasPrefix(path, "raid-groups/") {
+		parts := strings.Split(path, "/")
+		if len(parts) == 3 && parts[2] == "action" {
+			s.raidAction(w, r, parts[1])
+			return true
+		}
+	}
 	if path == "pools" {
 		items, err := s.Storage.Pools(r.Context())
 		if err != nil {
@@ -651,6 +658,35 @@ func (s *Server) storageRoute(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	return false
+}
+
+func (s *Server) raidAction(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodPost {
+		s.fail(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "POST required", nil)
+		return
+	}
+	if s.Config.Profile != "full_trust" {
+		s.fail(w, r, http.StatusForbidden, "forbidden", "RAID scrub actions require full_trust", nil)
+		return
+	}
+	var req struct {
+		Action string `json:"action"`
+		DryRun bool   `json:"dry_run"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	result, err := s.Storage.RAIDAction(name, req.Action, req.DryRun)
+	if err != nil {
+		s.fail(w, r, http.StatusUnprocessableEntity, "raid_action_failed", err.Error(), nil)
+		return
+	}
+	if !req.DryRun && !result.Applied {
+		s.fail(w, r, http.StatusConflict, "raid_action_not_applied", "mdraid did not report the requested sync action", result)
+		return
+	}
+	s.audit(r, "storage.raid."+req.Action, "success", result, 0, "")
+	s.ok(w, r, result)
 }
 func (s *Server) userRoute(w http.ResponseWriter, r *http.Request) bool {
 	switch r.URL.Path {

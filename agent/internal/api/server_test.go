@@ -187,6 +187,18 @@ func TestSnapshotCapabilityEndpointIsStructured(t *testing.T) {
 	}
 }
 
+func TestRAIDActionRequiresAvailableSyncControl(t *testing.T) {
+	s, token := testServer(t)
+	w := request(t, s, token, http.MethodPost, "/v1/storage/raid-groups/md0/action", `{"action":"scrub_start","dry_run":true}`)
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "raid_action_failed") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, s, token, http.MethodGet, "/v1/storage/raid-groups/md0/action", "")
+	if w.Code != http.StatusMethodNotAllowed || !strings.Contains(w.Body.String(), "POST required") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestLogTailAcceptsRFC3339Window(t *testing.T) {
 	s, token := testServer(t)
 	if err := os.WriteFile(s.Config.Audit.Path, []byte(`{"ts":"2026-08-14T01:00:00Z","action":"match"}`+"\n"), 0600); err != nil {

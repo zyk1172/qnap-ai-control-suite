@@ -16,6 +16,7 @@
 常用工具按域：
 
 - System：`nas_system_info`、`nas_system_resources`、`nas_process_list`、`nas_process_action`、`nas_service_list`、`nas_service_action`、`nas_system_thermal`、`nas_power`。
+- Storage：`nas_raid` 会报告 Linux mdraid 成员、位图、降级状态与同步进度；`nas_raid_manage` 在本机存在标准 `sync_action` 时支持 `scrub_start` / `scrub_stop`。`nas_snapshot_manage` 可对 ZFS snapshot 执行 `create`、`delete`、`clone` 与 `restore`（`zfs rollback`）；QTS 私有 restore 仍通过 probe 后的命令或 `nas_exec` 执行。
 - Files：`nas_file_list`、`nas_file_read`、`nas_file_write`、`nas_file_write_binary`、`nas_file_append`、`nas_file_search`、`nas_file_tail`、`nas_file_du`、`nas_file_manage`、`nas_file_checksum`。`nas_file_manage` 还支持 ZIP/TAR/TAR.GZ 的 `archive` 与 `extract`，并拒绝归档路径穿越和链接条目。
 - Docker：`nas_docker_containers`、`nas_docker_command` 与各兼容细分工具。
 - QPKG：`nas_qpkg_list`、`nas_qpkg_manage`。支持 `start`、`stop`、`restart`、`enable`、`disable`、`status`、`download`、`cancel`、`remove`、`install_file`、`install_url`、`update_all`、`clean` 和 `add`。`restart` 会执行 QTS 支持的 stop/start 两条命令；`dry_run` 返回实际 argv，不执行变更。`async: true` 适用于下载、安装、移除和更新，返回 Job；完成时会重新读取 QPKG inventory。
