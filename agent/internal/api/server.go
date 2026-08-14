@@ -877,7 +877,7 @@ func (s *Server) run(r *http.Request, argv []string, req qexec.Request) (qexec.R
 	if req.Timeout <= 0 {
 		req.Timeout = s.Config.Timeout()
 	}
-	if req.MaxOutput <= 0 {
+	if req.MaxOutput <= 0 || req.MaxOutput > s.Config.Command.MaxOutputBytes {
 		req.MaxOutput = s.Config.Command.MaxOutputBytes
 	}
 	return s.Exec.Run(r.Context(), req)
@@ -1082,10 +1082,15 @@ func (s *Server) jobListOrStart(w http.ResponseWriter, r *http.Request) {
 		s.ok(w, r, map[string]any{"jobs": s.Jobs.List()})
 		return
 	}
+	if r.Method != http.MethodPost {
+		s.fail(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "GET or POST required", nil)
+		return
+	}
 	var req struct {
 		Kind    string      `json:"kind"`
 		Command execRequest `json:"command"`
 		Shell   string      `json:"shell"`
+		Script  string      `json:"script"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -1093,43 +1098,72 @@ func (s *Server) jobListOrStart(w http.ResponseWriter, r *http.Request) {
 	if req.Kind == "" {
 		req.Kind = "exec"
 	}
-	if req.Shell != "" {
+	script := req.Script
+	shellPath := req.Shell
+	if script == "" && shellPath != "" {
+		// Keep the existing shell-as-script body compatible with earlier API
+		// clients while accepting the explicit shell + script form.
+		script, shellPath = shellPath, ""
+	}
+	if script != "" {
 		if !s.Config.Permissions.AllowShell {
 			s.fail(w, r, 403, "shell_disabled", "shell execution is disabled", nil)
 			return
 		}
-		req.Command.Argv = []string{"/bin/sh", "-c", req.Shell}
+		if shellPath == "" {
+			shellPath = detectShell()
+		}
+		if !validShell(shellPath) {
+			s.fail(w, r, http.StatusServiceUnavailable, "shell_unavailable", "no executable shell was found", nil)
+			return
+		}
+		req.Command.Argv = []string{shellPath, "-c", script}
 	}
 	if len(req.Command.Argv) == 0 {
 		s.fail(w, r, 400, "invalid_request", "command.argv or shell is required", nil)
 		return
 	}
+	stdin := []byte(req.Command.Stdin)
+	var err error
+	if req.Command.StdinBase64 != "" {
+		stdin, err = decodeBase64(req.Command.StdinBase64)
+	} else {
+		err = nil
+	}
+	if err != nil {
+		s.fail(w, r, http.StatusBadRequest, "invalid_stdin_base64", err.Error(), nil)
+		return
+	}
 	job := s.Jobs.Start(req.Kind, func(ctx context.Context, log func(string)) (any, error) {
 		request := (&http.Request{}).WithContext(ctx)
-		result, err := s.run(request, req.Command.Argv, qexec.Request{CWD: req.Command.CWD, Env: req.Command.Env, Timeout: time.Duration(req.Command.TimeoutSec) * time.Second, MaxOutput: req.Command.MaxOutput, DryRun: req.Command.DryRun})
-		log(result.Stdout)
-		log(result.Stderr)
+		result, err := s.run(request, req.Command.Argv, qexec.Request{CWD: req.Command.CWD, Env: req.Command.Env, Stdin: stdin, Timeout: time.Duration(req.Command.TimeoutSec) * time.Second, MaxOutput: req.Command.MaxOutput, DryRun: req.Command.DryRun})
+		if result.Stdout != "" {
+			log(result.Stdout)
+		}
+		if result.Stderr != "" {
+			log(result.Stderr)
+		}
 		return result, err
 	})
+	s.audit(r, "jobs.start", "queued", map[string]any{"kind": req.Kind, "argv": req.Command.Argv, "cwd": req.Command.CWD, "dry_run": req.Command.DryRun}, 0, "")
 	s.ok(w, r, job)
 }
 func (s *Server) jobByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/v1/jobs/")
 	if strings.HasSuffix(id, "/logs") {
 		id = strings.TrimSuffix(id, "/logs")
-		job, ok := s.Jobs.Get(id)
+		if r.Method != http.MethodGet {
+			s.fail(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "GET required", nil)
+			return
+		}
+		cursor, _ := strconv.Atoi(r.URL.Query().Get("cursor"))
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		lines, next, truncated, ok := s.Jobs.Logs(id, cursor, limit)
 		if !ok {
 			s.fail(w, r, 404, "not_found", "job not found", nil)
 			return
 		}
-		cursor, _ := strconv.Atoi(r.URL.Query().Get("cursor"))
-		if cursor < 0 {
-			cursor = 0
-		}
-		if cursor > len(job.Logs) {
-			cursor = len(job.Logs)
-		}
-		s.ok(w, r, map[string]any{"id": id, "lines": job.Logs[cursor:], "next_cursor": len(job.Logs)})
+		s.ok(w, r, map[string]any{"id": id, "lines": lines, "next_cursor": next, "logs_truncated": truncated})
 		return
 	}
 	if strings.HasSuffix(id, "/cancel") {

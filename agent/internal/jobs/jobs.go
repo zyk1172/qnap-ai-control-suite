@@ -21,31 +21,40 @@ const (
 )
 
 type Job struct {
-	ID         string     `json:"id"`
-	Kind       string     `json:"kind"`
-	Status     Status     `json:"status"`
-	Progress   float64    `json:"progress"`
-	CreatedAt  time.Time  `json:"created_at"`
-	StartedAt  *time.Time `json:"started_at,omitempty"`
-	FinishedAt *time.Time `json:"finished_at,omitempty"`
-	ExitCode   *int       `json:"exit_code,omitempty"`
-	Result     any        `json:"result,omitempty"`
-	Error      string     `json:"error,omitempty"`
-	Logs       []string   `json:"logs,omitempty"`
-	cancel     context.CancelFunc
+	ID            string     `json:"id"`
+	Kind          string     `json:"kind"`
+	Status        Status     `json:"status"`
+	Progress      float64    `json:"progress"`
+	CreatedAt     time.Time  `json:"created_at"`
+	StartedAt     *time.Time `json:"started_at,omitempty"`
+	FinishedAt    *time.Time `json:"finished_at,omitempty"`
+	ExitCode      *int       `json:"exit_code,omitempty"`
+	Result        any        `json:"result,omitempty"`
+	Error         string     `json:"error,omitempty"`
+	LogCount      int        `json:"log_count"`
+	LogBytes      int        `json:"log_bytes"`
+	LogsTruncated bool       `json:"logs_truncated"`
+	Logs          []string   `json:"-"`
+	cancel        context.CancelFunc
 }
 type Manager struct {
-	mu         sync.RWMutex
-	jobs       map[string]*Job
-	maxHistory int
-	next       uint64
+	mu          sync.RWMutex
+	jobs        map[string]*Job
+	maxHistory  int
+	maxLogBytes int
+	next        uint64
 }
+
+const (
+	maxLogLines        = 1000
+	defaultMaxLogBytes = 16 * 1024 * 1024
+)
 
 func New(maxHistory int) *Manager {
 	if maxHistory <= 0 {
 		maxHistory = 200
 	}
-	return &Manager{jobs: map[string]*Job{}, maxHistory: maxHistory}
+	return &Manager{jobs: map[string]*Job{}, maxHistory: maxHistory, maxLogBytes: defaultMaxLogBytes}
 }
 func (m *Manager) Start(kind string, fn func(context.Context, func(string)) (any, error)) Job {
 	m.mu.Lock()
@@ -63,13 +72,7 @@ func (m *Manager) Start(kind string, fn func(context.Context, func(string)) (any
 		job.Status = Running
 		job.StartedAt = &now
 		m.mu.Unlock()
-		result, err := fn(ctx, func(line string) {
-			m.mu.Lock()
-			defer m.mu.Unlock()
-			if len(job.Logs) < 1000 {
-				job.Logs = append(job.Logs, line)
-			}
-		})
+		result, err := fn(ctx, func(line string) { m.appendLog(job, line) })
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		end := time.Now().UTC()
@@ -119,6 +122,28 @@ func (m *Manager) Cancel(id string) bool {
 	}
 	return ok
 }
+func (m *Manager) Logs(id string, cursor, limit int) ([]string, int, bool, bool) {
+	if cursor < 0 {
+		cursor = 0
+	}
+	if limit <= 0 || limit > 2000 {
+		limit = 200
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	job, ok := m.jobs[id]
+	if !ok {
+		return nil, 0, false, false
+	}
+	if cursor > len(job.Logs) {
+		cursor = len(job.Logs)
+	}
+	end := cursor + limit
+	if end > len(job.Logs) {
+		end = len(job.Logs)
+	}
+	return append([]string(nil), job.Logs[cursor:end]...), end, job.LogsTruncated, true
+}
 func (m *Manager) trimLocked() {
 	if len(m.jobs) <= m.maxHistory {
 		return
@@ -136,7 +161,27 @@ func (m *Manager) trimLocked() {
 		delete(m.jobs, oldest.ID)
 	}
 }
-func clone(j Job) Job { j.cancel = nil; j.Logs = append([]string(nil), j.Logs...); return j }
+func (m *Manager) appendLog(job *Job, line string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if job.LogsTruncated || len(job.Logs) >= maxLogLines {
+		job.LogsTruncated = true
+		return
+	}
+	remaining := m.maxLogBytes - job.LogBytes
+	if remaining <= 0 {
+		job.LogsTruncated = true
+		return
+	}
+	if len(line) > remaining {
+		line = line[:remaining]
+		job.LogsTruncated = true
+	}
+	job.Logs = append(job.Logs, line)
+	job.LogCount = len(job.Logs)
+	job.LogBytes += len(line)
+}
+func clone(j Job) Job { j.cancel = nil; j.Logs = nil; return j }
 func stringID(n uint64) string {
 	const chars = "0123456789abcdef"
 	if n == 0 {

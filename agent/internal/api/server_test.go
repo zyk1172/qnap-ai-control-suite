@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,8 +10,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"qnap-ai-control-suite/agent/internal/config"
+	"qnap-ai-control-suite/agent/internal/jobs"
 )
 
 func testServer(t *testing.T) (*Server, string) {
@@ -70,6 +73,15 @@ func TestCommandNonZeroIsNotSuccess(t *testing.T) {
 		t.Fatalf("result=%+v", result)
 	}
 }
+
+func TestCommandOutputCannotExceedConfiguredLimit(t *testing.T) {
+	s, token := testServer(t)
+	s.Config.Command.MaxOutputBytes = 4
+	w := request(t, s, token, http.MethodPost, "/v1/exec", `{"argv":["/bin/sh","-c","printf 123456789"],"max_output_bytes":4096}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"stdout":"1234"`) || !strings.Contains(w.Body.String(), `"stdout_truncated":true`) {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
 func TestFullTrustShell(t *testing.T) {
 	s, token := testServer(t)
 	w := request(t, s, token, http.MethodPost, "/v1/shell", `{"shell":"printf works"}`)
@@ -111,6 +123,39 @@ func TestStructuredSystemResourcesAndJobs(t *testing.T) {
 	w = request(t, s, token, http.MethodPost, "/v1/jobs", `{"kind":"test","command":{"argv":["/bin/echo","job"],"dry_run":true}}`)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "queued") {
 		t.Fatalf("job status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestJobLogsArePagedAndHiddenFromMetadata(t *testing.T) {
+	s, token := testServer(t)
+	job := s.Jobs.Start("logs", func(_ context.Context, log func(string)) (any, error) {
+		log("one")
+		log("two")
+		return "done", nil
+	})
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		current, ok := s.Jobs.Get(job.ID)
+		if ok && current.Status == jobs.Succeeded {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	w := request(t, s, token, http.MethodGet, "/v1/jobs/"+job.ID, "")
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"logs":`) || !strings.Contains(w.Body.String(), `"log_count":2`) {
+		t.Fatalf("metadata status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, s, token, http.MethodGet, "/v1/jobs/"+job.ID+"/logs?limit=1", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"lines":["one"]`) || !strings.Contains(w.Body.String(), `"next_cursor":1`) {
+		t.Fatalf("logs status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestJobStartSupportsExplicitShellAndBase64Stdin(t *testing.T) {
+	s, token := testServer(t)
+	w := request(t, s, token, http.MethodPost, "/v1/jobs", `{"kind":"shell-test","shell":"/bin/sh","script":"read value; printf %s \"$value\"","command":{"stdin_base64":"aGVsbG8="}}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"kind":"shell-test"`) || !strings.Contains(w.Body.String(), `"status":"queued"`) {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }
 
