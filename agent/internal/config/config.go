@@ -263,7 +263,7 @@ func cleanPaths(paths []string) []string {
 func boolPtr(v bool) *bool { return &v }
 func validAdapterName(name string) bool {
 	switch name {
-	case "virtualization_station", "hbs3", "iscsi", "certificates":
+	case "virtualization_station", "hbs3", "iscsi", "certificates", "shares":
 		return true
 	default:
 		return false

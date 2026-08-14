@@ -715,6 +715,9 @@ func (s *Server) shareRoute(w http.ResponseWriter, r *http.Request) bool {
 			s.ok(w, r, map[string]any{"exports": items})
 		}
 		return true
+	case "/v1/shares/manage":
+		s.ecosystemCommand(w, r, "shares")
+		return true
 	case "/v1/acl":
 		var req struct {
 			Path string `json:"path"`

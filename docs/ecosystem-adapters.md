@@ -36,5 +36,6 @@ MCP mappings:
 - `nas_hbs_action` -> `hbs3`
 - `nas_iscsi_action` -> `iscsi`
 - `nas_certificate_action` -> `certificates`
+- `nas_share_manage` -> `shares`
 
 For a command not yet verified, use `nas_exec` or `nas_shell` in `full_trust` only after inspecting the NAS-local command help. This is the fallback path; it does not make the corresponding adapter supported.

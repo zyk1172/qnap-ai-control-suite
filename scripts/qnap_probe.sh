@@ -18,7 +18,7 @@ CONTAINER_DOCKER=""
 for p in /share/CACHEDEV*_DATA/.qpkg/container-station/bin/system-docker /share/CACHEDEV*_DATA/.qpkg/container-station/usr/bin/.libs/docker; do
   if [ -x "$p" ]; then CONTAINER_DOCKER="$p"; break; fi
 done
-ADAPTER_BINARIES="$(find /share/CACHEDEV*_DATA/.qpkg -maxdepth 5 -type f -perm -111 2>/dev/null | grep -Ei 'qkvm|virtual|hbs|hybrid|iscsi|cert' | head -100 || true)"
+ADAPTER_BINARIES="$(find /share/CACHEDEV*_DATA/.qpkg -maxdepth 5 -type f -perm -111 2>/dev/null | grep -Ei 'qkvm|virtual|hbs|hybrid|iscsi|cert|smb|nfs|share' | head -100 || true)"
 CERTIFICATE_PATHS="$(find /etc/config -maxdepth 4 -type f \( -name '*.pem' -o -name '*.crt' -o -name '*.cer' \) 2>/dev/null | head -100 || true)"
 exists() { [ -e "$1" ] && printf true || printf false; }
 

@@ -42,11 +42,13 @@ func (s Service) Inventory(ctx context.Context) []Adapter {
 	d := s.Discovery.Discover(ctx)
 	vmInstalled := has(d.QPKGs, "virtualization") || has(d.QPKGs, "qkvm")
 	hbsInstalled := has(d.QPKGs, "hybrid backup") || has(d.QPKGs, "hybridbackup") || has(d.QPKGs, "hbs")
+	sharesInstalled := pathExists("/etc/config/smb.conf") || pathExists("/etc/samba/smb.conf")
 	return []Adapter{
 		s.adapter("virtualization_station", vmInstalled, "QKVM/Virtualization Station detected; configure verified commands from a NAS runtime probe", []string{"list", "info", "start", "stop", "restart", "force_stop", "snapshot", "clone"}),
 		s.adapter("hbs3", hbsInstalled, "HBS package detected; configure verified commands from a NAS runtime probe", []string{"job_list", "job_status", "run", "stop", "logs"}),
 		s.adapter("iscsi", d.Features["iscsi"].Supported, "configure verified iSCSI/LUN commands from a NAS runtime probe", []string{"targets", "luns", "mapping", "status", "snapshots", "online", "offline", "expand", "clone"}),
 		s.adapter("certificates", true, "configure verified certificate commands from a NAS runtime probe", []string{"list", "current", "expiry", "issuer", "subject", "san", "import", "replace"}),
+		s.adapter("shares", sharesInstalled, "SMB/NFS configuration found; configure verified QNAP shared-folder commands from a NAS runtime probe", []string{"create", "delete", "rename", "set_path", "quota", "hidden", "recycle_bin", "nfs_export"}),
 		{Name: "ups", Installed: d.Features["ups"].Supported, Supported: d.Features["ups"].Supported, Reason: d.Features["ups"].Reason, Capabilities: []string{"state", "battery", "runtime", "input", "configuration"}},
 	}
 }
@@ -212,6 +214,11 @@ func executable(name string) string {
 		}
 	}
 	return ""
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func parseUPS(stdout string) map[string]string {

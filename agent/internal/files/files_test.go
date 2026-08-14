@@ -123,3 +123,29 @@ func TestArchiveDestinationRejectsTraversal(t *testing.T) {
 		t.Fatal("expected traversal rejection")
 	}
 }
+
+func TestManageRecursiveChmodSkipsSymlinks(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(filepath.Join(root, "child"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	s := Service{Roots: []string{root}, MaxInlineBytes: 1024}
+	if err := s.Manage("chmod", root, "", 0750, true); err != nil {
+		t.Fatal(err)
+	}
+	child, err := os.Stat(filepath.Join(root, "child"))
+	if err != nil || child.Mode().Perm() != 0750 {
+		t.Fatalf("child mode=%v err=%v", child.Mode(), err)
+	}
+	outsideInfo, err := os.Stat(outside)
+	if err != nil || outsideInfo.Mode().Perm() != 0600 {
+		t.Fatalf("outside mode=%v err=%v", outsideInfo.Mode(), err)
+	}
+}

@@ -60,10 +60,11 @@ func TestNormalizeAcceptsVerifiedQNAPAdapter(t *testing.T) {
 		Auth:        Auth{TokenSHA256: "abc"},
 		Permissions: Permissions{AllowedRoots: []string{"/share"}},
 		QNAPAdapters: map[string]QNAPAdapter{
-			"hbs3": {Commands: map[string][]string{"job_status": {"/share/CACHEDEV1_DATA/.qpkg/HBS3/bin/hbs", "status", "{id}"}}},
+			"hbs3":   {Commands: map[string][]string{"job_status": {"/share/CACHEDEV1_DATA/.qpkg/HBS3/bin/hbs", "status", "{id}"}}},
+			"shares": {Commands: map[string][]string{"create": {"/share/CACHEDEV1_DATA/.qpkg/share-tool", "create", "{name}"}}},
 		},
 	})
-	if err != nil || len(cfg.QNAPAdapters["hbs3"].Commands) != 1 {
+	if err != nil || len(cfg.QNAPAdapters["hbs3"].Commands) != 1 || len(cfg.QNAPAdapters["shares"].Commands) != 1 {
 		t.Fatalf("adapter normalization failed: %#v, %v", cfg.QNAPAdapters, err)
 	}
 }

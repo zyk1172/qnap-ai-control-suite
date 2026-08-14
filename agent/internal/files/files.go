@@ -328,22 +328,17 @@ func (s Service) Manage(action, path, target string, mode os.FileMode, recursive
 		return err
 	}
 	if action == "chmod" {
-		return os.Chmod(resolved, mode)
+		if mode == 0 {
+			return errors.New("mode is required for chmod")
+		}
+		return applyTree(resolved, recursive, func(current string) error { return os.Chmod(current, mode) })
 	}
 	if action == "chown" {
-		parts := strings.Split(target, ":")
-		if len(parts) != 2 {
-			return errors.New("target must be uid:gid")
-		}
-		uid, err := strconv.Atoi(parts[0])
+		uid, gid, err := parseOwner(target)
 		if err != nil {
 			return err
 		}
-		gid, err := strconv.Atoi(parts[1])
-		if err != nil {
-			return err
-		}
-		return os.Chown(resolved, uid, gid)
+		return applyTree(resolved, recursive, func(current string) error { return os.Chown(current, uid, gid) })
 	}
 	if action == "truncate" {
 		return os.Truncate(resolved, 0)
@@ -415,6 +410,39 @@ func copyFile(from, to string) error {
 		return copyErr
 	}
 	return closeErr
+}
+
+func parseOwner(value string) (int, int, error) {
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 {
+		return 0, 0, errors.New("target must be uid:gid")
+	}
+	uid, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, err
+	}
+	gid, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, err
+	}
+	return uid, gid, nil
+}
+
+// applyTree keeps recursive metadata changes inside the resolved root and
+// never follows descendant symlinks.
+func applyTree(root string, recursive bool, apply func(string) error) error {
+	if !recursive {
+		return apply(root)
+	}
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		return apply(path)
+	})
 }
 
 func archivePath(source, target string) error {

@@ -205,7 +205,8 @@ func TestLogTailAcceptsRFC3339Window(t *testing.T) {
 func TestConfiguredEcosystemAdapterDryRun(t *testing.T) {
 	s, token := testServer(t)
 	s.Config.QNAPAdapters = map[string]config.QNAPAdapter{
-		"hbs3": {Commands: map[string][]string{"job_status": {"/bin/echo", "status", "{id}"}}},
+		"hbs3":   {Commands: map[string][]string{"job_status": {"/bin/echo", "status", "{id}"}}},
+		"shares": {Commands: map[string][]string{"rename": {"/bin/echo", "share", "rename", "{name}", "{target}"}}},
 	}
 	s.Ecosystem.Adapters = s.Config.QNAPAdapters
 	w := request(t, s, token, http.MethodPost, "/v1/qnap/hbs/action", `{"action":"job_status","id":"backup-1","dry_run":true}`)
@@ -214,6 +215,10 @@ func TestConfiguredEcosystemAdapterDryRun(t *testing.T) {
 	}
 	w = request(t, s, token, http.MethodPost, "/v1/qnap/vm/action", `{"action":"list","dry_run":true}`)
 	if w.Code != http.StatusNotImplemented || !strings.Contains(w.Body.String(), "adapter_unavailable") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, s, token, http.MethodPost, "/v1/shares/manage", `{"action":"rename","name":"old","target":"new","dry_run":true}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"argv":["/bin/echo","share","rename","old","new"]`) || !strings.Contains(w.Body.String(), `"adapter":"shares"`) {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }

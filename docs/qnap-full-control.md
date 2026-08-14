@@ -22,6 +22,7 @@
 - Discovery：`nas_discovery` 显示 QTS/QuTS hero、工具链和 adapter capability 状态。
 - System：`nas_system_info` 与 `nas_system_resources` 返回 CPU、RAM、swap、load、挂载、时间、时区和 NTP 摘要；`nas_system_sockets` 返回 TCP/UDP socket inventory，`nas_system_ntp` 返回可识别的 NTP/chrony 配置源和服务器。
 - Ecosystem：`nas_qnap_ecosystem` 显示 QKVM/Virtualization Station、HBS、iSCSI、certificate 与 UPS 适配器状态；`nas_ups` 在 NUT `upsc` 可用时返回实际 UPS inventory、battery、runtime、input 和 status 值。`nas_certificate_inspect` 可直接解析指定 PEM/CRT 的公开 X.509 元数据。对于已通过真机 probe 验证的私有命令，可在 `qnap_adapters` 配置后使用 `nas_vm_action`、`nas_hbs_action`、`nas_iscsi_action` 与 `nas_certificate_action`；见 [ecosystem-adapters.md](ecosystem-adapters.md)。
-- Accounts and shares：`nas_users` 返回主组与附加组关系；`nas_user_manage`、`nas_groups`、`nas_group_manage`（含 `member_add` / `member_remove`，`args` 为单个用户名）、`nas_share_list`、`nas_acl_get`、`nas_acl_set`。只有经 runtime probe 验证存在的系统工具会执行写操作。
+- Accounts and shares：`nas_users` 返回主组与附加组关系；`nas_user_manage`、`nas_groups`、`nas_group_manage`（含 `member_add` / `member_remove`，`args` 为单个用户名）、`nas_share_list`、`nas_share_manage`、`nas_acl_get`、`nas_acl_set`。`nas_share_manage` 仅执行 probe 后配置的共享目录 argv adapter；不会把文件夹当作 QNAP shared folder。只有经 runtime probe 验证存在的系统工具会执行写操作。
+- POSIX metadata：`nas_file_manage` 的 `chmod` 和 `chown` 支持 `recursive: true`；递归时不会跟随目录内符号链接。`chown` 的 `target` 使用 `uid:gid`，`chmod` 使用八进制 `mode`。
 
 `observe`、`operate`、`admin` profile 仍可用于受限部署。它们保留 `allowed_roots`、命令列表、secret redaction 与 confirmation 模式。设置变更后重启 QPKG。
