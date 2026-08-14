@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -13,12 +14,18 @@ import (
 
 type Service struct{ Exec qexec.Executor }
 type Result struct {
-	Model      string             `json:"model,omitempty"`
-	Platform   string             `json:"platform"`
-	Features   map[string]Feature `json:"features"`
-	Utilities  map[string]string  `json:"utilities"`
-	QPKGConfig bool               `json:"qpkg_config"`
-	QPKGs      []string           `json:"qpkgs"`
+	Model       string             `json:"model,omitempty"`
+	Firmware    string             `json:"firmware,omitempty"`
+	Hostname    string             `json:"hostname,omitempty"`
+	Arch        string             `json:"arch"`
+	CPUCount    int                `json:"cpu_count"`
+	MemoryBytes uint64             `json:"memory_bytes,omitempty"`
+	DiskCount   int                `json:"disk_count"`
+	Platform    string             `json:"platform"`
+	Features    map[string]Feature `json:"features"`
+	Utilities   map[string]string  `json:"utilities"`
+	QPKGConfig  bool               `json:"qpkg_config"`
+	QPKGs       []string           `json:"qpkgs"`
 }
 type Feature struct {
 	Supported bool   `json:"supported"`
@@ -26,7 +33,8 @@ type Feature struct {
 }
 
 func (s Service) Discover(ctx context.Context) Result {
-	r := Result{Platform: "qts_or_linux", Features: map[string]Feature{}, Utilities: map[string]string{}, QPKGConfig: fileExists("/etc/config/qpkg.conf"), QPKGs: installedQPKGs("/etc/config/qpkg.conf")}
+	host, _ := os.Hostname()
+	r := Result{Hostname: host, Arch: runtime.GOARCH, CPUCount: runtime.NumCPU(), MemoryBytes: memoryBytes(), DiskCount: diskCount(), Platform: "qts_or_linux", Features: map[string]Feature{}, Utilities: map[string]string{}, QPKGConfig: fileExists("/etc/config/qpkg.conf"), QPKGs: installedQPKGs("/etc/config/qpkg.conf")}
 	for _, name := range []string{"getcfg", "setcfg", "qpkg_cli", "getsysinfo", "docker", "smartctl", "mdadm", "zpool", "zfs", "ip", "systemctl"} {
 		if path := find(name); path != "" {
 			r.Utilities[name] = path
@@ -39,6 +47,9 @@ func (s Service) Discover(ctx context.Context) Result {
 	}
 	if out, err := s.Exec.Run(ctx, qexec.Request{Argv: []string{"/sbin/getsysinfo", "model"}}); err == nil {
 		r.Model = strings.TrimSpace(out.Stdout)
+	}
+	if out, err := s.Exec.Run(ctx, qexec.Request{Argv: []string{"/sbin/getsysinfo", "version"}}); err == nil {
+		r.Firmware = strings.TrimSpace(out.Stdout)
 	}
 	if _, ok := r.Utilities["zfs"]; ok {
 		r.Platform = "quts_hero"
@@ -60,10 +71,41 @@ func (s Service) Discover(ctx context.Context) Result {
 	}
 	r.Features["virtualization_station"] = qpkgFeature(r.QPKGs, []string{"virtualizationstation", "virtualization station", "qkvm"})
 	r.Features["hbs3"] = qpkgFeature(r.QPKGs, []string{"hybrid backup", "hybridbackup", "hbs"})
+	r.Features["container_station"] = qpkgFeature(r.QPKGs, []string{"container-station", "container station"})
+	r.Features["qsirch"] = qpkgFeature(r.QPKGs, []string{"qsirch"})
+	r.Features["multimedia_console"] = qpkgFeature(r.QPKGs, []string{"multimedia console", "multimediaconsole"})
 	r.Features["iscsi"] = Feature{Supported: false, Reason: "QNAP runtime probe required for stable iSCSI adapter"}
 	r.Features["certificates"] = Feature{Supported: false, Reason: "QNAP runtime probe required for certificate inventory adapter"}
 	r.Features["ups"] = Feature{Supported: find("upsc") != "", Reason: "NUT upsc utility not found"}
 	return r
+}
+func memoryBytes() uint64 {
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 2 && f[0] == "MemTotal:" {
+			n, _ := strconv.ParseUint(f[1], 10, 64)
+			return n * 1024
+		}
+	}
+	return 0
+}
+func diskCount() int {
+	entries, err := os.ReadDir("/sys/block")
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, entry := range entries {
+		n := entry.Name()
+		if strings.HasPrefix(n, "sd") || strings.HasPrefix(n, "nvme") {
+			count++
+		}
+	}
+	return count
 }
 func find(name string) string {
 	for _, dir := range strings.Split(os.Getenv("PATH"), ":") {
