@@ -1,6 +1,8 @@
 package qpkg
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -22,6 +24,35 @@ func TestCommandArgsUsesQTSFlags(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(got, test.want) {
 			t.Fatalf("%s: got=%v err=%v want=%v", test.action, got, err, test.want)
 		}
+	}
+}
+
+func TestRunningPIDsMatchesInstallPathExecutableAndCommandLine(t *testing.T) {
+	proc := t.TempDir()
+	root := "/share/CACHEDEV1_DATA/.qpkg/Example"
+	for _, item := range []struct {
+		pid string
+		exe string
+		cmd string
+	}{
+		{"9", root + "/bin/agent", ""},
+		{"10", "/bin/sh", "/bin/sh\x00" + root + "/service.sh\x00"},
+		{"11", "/usr/bin/other", "/usr/bin/other\x00"},
+	} {
+		dir := filepath.Join(proc, item.pid)
+		if err := os.Mkdir(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(item.exe, filepath.Join(dir, "exe")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "cmdline"), []byte(item.cmd), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pids, err := runningPIDs(root, proc)
+	if err != nil || !reflect.DeepEqual(pids, []string{"9", "10"}) {
+		t.Fatalf("pids=%#v err=%v", pids, err)
 	}
 }
 

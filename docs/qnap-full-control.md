@@ -20,7 +20,7 @@
 - Files：`nas_file_list`、`nas_file_read`、`nas_file_write`、`nas_file_write_binary`、`nas_file_append`、`nas_file_search`、`nas_file_tail`、`nas_file_du`、`nas_file_manage`、`nas_file_checksum`。`nas_file_manage` 还支持 ZIP/TAR/TAR.GZ 的 `archive` 与 `extract`，并拒绝归档路径穿越和链接条目。
 - Docker：`nas_docker_containers`、`nas_docker_command` 与各兼容细分工具。
 - Long-running commands：`nas_job_start` 可异步运行任意 argv command，或显式 `shell` + `script`，支持 `cwd`、`env`、base64 stdin、timeout、输出上限和 dry run。用 `nas_job_get` 读取状态/结果、`nas_job_logs` 以 cursor/limit 分页读取有界日志、`nas_job_cancel` 取消任务；Job metadata 不再内嵌完整日志。
-- QPKG：`nas_qpkg_list`、`nas_qpkg_manage`。支持 `start`、`stop`、`restart`、`enable`、`disable`、`status`、`download`、`cancel`、`remove`、`install_file`、`install_url`、`update_all`、`clean` 和 `add`。`restart` 会执行 QTS 支持的 stop/start 两条命令；`dry_run` 返回实际 argv，不执行变更。`async: true` 适用于下载、安装、移除和更新，返回 Job；完成时会重新读取 QPKG inventory。
+- QPKG：`nas_qpkg_list`、`nas_qpkg_manage`。inventory 结合 `qpkg.conf`、`qpkg_cli`、安装脚本和 `/proc`，对每个 package 返回 `running` / `stopped` / `unknown` 及匹配到的 PID。支持 `start`、`stop`、`restart`、`enable`、`disable`、`status`、`download`、`cancel`、`remove`、`install_file`、`install_url`、`update_all`、`clean` 和 `add`。`restart` 会执行 QTS 支持的 stop/start 两条命令；`dry_run` 返回实际 argv，不执行变更。`async: true` 适用于下载、安装、移除和更新，返回 Job；完成时会重新读取 QPKG inventory。
 - Discovery：`nas_discovery` 显示 QTS/QuTS hero、工具链和 adapter capability 状态。
 - Probe：`nas_qnap_probe` 运行随 QPKG 安装的只读 runtime probe，将 QTS model、firmware、utilities、Container Station、storage 与 adapter executable 候选写入指定的绝对 NAS 路径。随后以 `nas_file_read` 或 NAS shell 查看 JSON，再配置对应的 `qnap_adapters`。
 - System：`nas_system_info` 与 `nas_system_resources` 返回 CPU、RAM、swap、load、挂载、时间、时区和 NTP 摘要；`nas_system_sockets` 返回 TCP/UDP socket inventory，`nas_system_ntp` 返回可识别的 NTP/chrony 配置源和服务器。
