@@ -28,6 +28,8 @@ Example schema. Paths and subcommands below are placeholders, not QNAP command c
 
 Supported placeholders are `{id}`, `{name}`, `{target}`, and a standalone `{args}`. Each value is inserted as argv, not interpreted by a shell. Any unknown placeholder, relative executable path, missing configured action, or missing required value is rejected.
 
+`nas_certificate_inspect` is available without a private QNAP adapter. Pass a PEM/CRT path returned by the probe to receive public X.509 subject, issuer, SAN, validity, serial and SHA-256 fingerprint metadata. The active file-root policy applies. Private-key material is not returned by this tool; in `full_trust`, use the existing binary-safe `nas_file_read` only when the agent explicitly needs that file.
+
 MCP mappings:
 
 - `nas_vm_action` -> `virtualization_station`

@@ -207,6 +207,8 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request) {
 		s.ecosystemCommand(w, r, "iscsi")
 	case "/v1/qnap/certificates/action":
 		s.ecosystemCommand(w, r, "certificates")
+	case "/v1/qnap/certificates/inspect":
+		s.certificateInspect(w, r)
 	case "/v1/files/list":
 		s.fileList(w, r)
 	case "/v1/files/stat":
@@ -1347,6 +1349,28 @@ func (s *Server) ecosystemCommand(w http.ResponseWriter, r *http.Request, adapte
 	}
 	result, err := s.run(r, argv, command)
 	s.respondCommand(w, r, result, err)
+}
+func (s *Server) certificateInspect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.fail(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "POST required", nil)
+		return
+	}
+	var req struct {
+		Path string `json:"path"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if _, err := s.Files.Stat(req.Path); err != nil {
+		s.fileErr(w, r, err)
+		return
+	}
+	certificate, command, err := s.Ecosystem.Certificate(r.Context(), req.Path)
+	if err != nil {
+		s.respondCommand(w, r, command, err)
+		return
+	}
+	s.ok(w, r, map[string]any{"certificate": certificate, "command": command})
 }
 func (s *Server) respondCommand(w http.ResponseWriter, r *http.Request, result qexec.Result, err error) {
 	if err == nil {

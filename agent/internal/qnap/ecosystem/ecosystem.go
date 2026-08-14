@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	stdexec "os/exec"
 	"path/filepath"
 	"qnap-ai-control-suite/agent/internal/config"
 	qexec "qnap-ai-control-suite/agent/internal/exec"
@@ -25,6 +26,16 @@ type Adapter struct {
 	Supported    bool     `json:"supported"`
 	Reason       string   `json:"reason,omitempty"`
 	Capabilities []string `json:"capabilities"`
+}
+type Certificate struct {
+	Path        string   `json:"path"`
+	Subject     string   `json:"subject,omitempty"`
+	Issuer      string   `json:"issuer,omitempty"`
+	NotBefore   string   `json:"not_before,omitempty"`
+	NotAfter    string   `json:"not_after,omitempty"`
+	Serial      string   `json:"serial,omitempty"`
+	Fingerprint string   `json:"fingerprint,omitempty"`
+	SAN         []string `json:"san,omitempty"`
 }
 
 func (s Service) Inventory(ctx context.Context) []Adapter {
@@ -90,6 +101,65 @@ func (s Service) Command(adapter, action string, values map[string]string, args 
 	}
 	timeout := time.Duration(setting.TimeoutSeconds) * time.Second
 	return argv, timeout, nil
+}
+
+// Certificate reads public X.509 metadata from a caller-selected certificate
+// file. It does not read or return private-key material.
+func (s Service) Certificate(ctx context.Context, path string) (Certificate, qexec.Result, error) {
+	if strings.TrimSpace(path) == "" {
+		return Certificate{}, qexec.Result{}, errors.New("certificate path is required")
+	}
+	openssl, err := stdexec.LookPath("openssl")
+	if err != nil {
+		return Certificate{}, qexec.Result{}, errors.New("openssl utility not found")
+	}
+	result, err := s.Exec.Run(ctx, qexec.Request{Argv: []string{openssl, "x509", "-in", path, "-noout", "-subject", "-issuer", "-startdate", "-enddate", "-serial", "-fingerprint", "-sha256", "-ext", "subjectAltName"}, Timeout: 20 * time.Second, MaxOutput: s.Exec.MaxOutput})
+	if err != nil {
+		return Certificate{}, result, err
+	}
+	certificate := parseCertificate(path, result.Stdout)
+	return certificate, result, nil
+}
+
+func parseCertificate(path, stdout string) Certificate {
+	certificate := Certificate{Path: path}
+	lines := strings.Split(stdout, "\n")
+	inSAN := false
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "subject="):
+			certificate.Subject = strings.TrimSpace(strings.TrimPrefix(line, "subject="))
+			inSAN = false
+		case strings.HasPrefix(line, "issuer="):
+			certificate.Issuer = strings.TrimSpace(strings.TrimPrefix(line, "issuer="))
+			inSAN = false
+		case strings.HasPrefix(line, "notBefore="):
+			certificate.NotBefore = strings.TrimSpace(strings.TrimPrefix(line, "notBefore="))
+			inSAN = false
+		case strings.HasPrefix(line, "notAfter="):
+			certificate.NotAfter = strings.TrimSpace(strings.TrimPrefix(line, "notAfter="))
+			inSAN = false
+		case strings.HasPrefix(line, "serial="):
+			certificate.Serial = strings.TrimSpace(strings.TrimPrefix(line, "serial="))
+			inSAN = false
+		case strings.Contains(strings.ToLower(line), "fingerprint="):
+			certificate.Fingerprint = strings.TrimSpace(line[strings.Index(strings.ToLower(line), "fingerprint=")+len("fingerprint="):])
+			inSAN = false
+		case strings.Contains(line, "Subject Alternative Name"):
+			inSAN = true
+		case inSAN:
+			for _, value := range strings.Split(line, ",") {
+				if value = strings.TrimSpace(value); value != "" {
+					certificate.SAN = append(certificate.SAN, value)
+				}
+			}
+		}
+	}
+	return certificate
 }
 
 // UPS returns the NUT daemon inventory and key/value status for every UPS

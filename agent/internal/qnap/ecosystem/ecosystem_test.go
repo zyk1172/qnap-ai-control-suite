@@ -41,3 +41,10 @@ func TestCommandExpandsOnlyKnownArgvPlaceholders(t *testing.T) {
 		t.Fatalf("expected rejected unused args, got %v", err)
 	}
 }
+
+func TestParseCertificateMetadata(t *testing.T) {
+	certificate := parseCertificate("/share/cert.pem", "subject=CN = nas.local\nissuer=CN = Local CA\nnotBefore=Aug 14 00:00:00 2026 GMT\nnotAfter=Aug 14 00:00:00 2027 GMT\nserial=ABCD\nsha256 Fingerprint=AA:BB\nX509v3 Subject Alternative Name:\n    DNS:nas.local, IP Address:192.168.1.2\n")
+	if certificate.Path != "/share/cert.pem" || certificate.Subject != "CN = nas.local" || certificate.Issuer != "CN = Local CA" || certificate.NotAfter == "" || certificate.Fingerprint != "AA:BB" || len(certificate.SAN) != 2 {
+		t.Fatalf("unexpected certificate: %#v", certificate)
+	}
+}
