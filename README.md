@@ -4,26 +4,26 @@ QNAP AI Control Suite v1 是面向 Codex、OpenClaw、Hermes 与其他 MCP clien
 
 ## v1.0.15
 
-- `full_trust` profile：根文件系统、任意 executable、shell pipeline、Docker/QPKG 写操作均可直接执行，仍保留 Bearer 认证与 JSONL 审计。
-- QPKG 升级会清理 PID 文件丢失的旧 Agent 进程，避免旧 0.3.x 进程继续占用服务端口。
-- 有界 command executor：区分非零退出、超时、找不到 executable 和启动失败；支持 `cwd`、环境变量、stdin、dry run 与独立 stdout/stderr 截断标志。
-- binary-safe 文件 API：base64 range read/write，符号链接解析后再做 root 边界检查。
-- QPKG、Docker、QTS/QuTS hero 运行时发现、系统、硬件、存储与网络概览。
-- QTS `qpkg_cli` 动作按已验证的 `--start`、`--stop`、`--enable`、`--disable` 等 flag 映射；TS-264C 的 Container Station `system-docker` / `.libs/docker` 会被优先发现。
-- 官方 `@modelcontextprotocol/sdk` 1.30.0，当前协议协商、JSON Schema、`structuredContent`。
-- 异步 Job、优雅停止、QPKG 真实 PID、统一 API envelope、QNAP probe 与集成检查脚本。
-- Job Manager 初始响应改为锁内快照，消除异步 Docker、QPKG 与生态任务的竞态。
-- `nas_log_tail` 支持有界游标、文本过滤和 RFC3339 `since` / `until` 时间窗口。
-- VM、HBS 3、iSCSI/LUN 与证书支持基于真机 probe 的 `qnap_adapters` argv 配置和结构化 MCP 动作；不会猜测 QTS 私有命令。
-- `nas_certificate_inspect` 可对指定 PEM/CRT 返回结构化的 subject、issuer、SAN、有效期、序列号和 SHA-256 指纹。
-- `nas_users` 现在合并主组和附加组；`nas_group_manage` 支持单成员添加/移除。系统信息新增显式 CPU/swap、NTP 及 TCP/UDP socket inventory。
-- `nas_file_manage` 的递归 chmod/chown 不再跟随子目录符号链接；新增 probe 驱动的 `nas_share_manage` 共享目录领域入口。
-- 从 0.3.x 升级时自动保留 Bearer Token hash 和运行参数，并按 v1 的 `full_trust` 权限模型运行，不再被旧 allowlist 限制。
-- mdraid inventory 现在返回阵列健康位图、成员数与 recovery/resync/reshape/check/repair 进度；新增可验证的 `nas_raid_manage` scrub 控制，并为 ZFS snapshots 增加 restore（rollback）Job。
-- `nas_job_start` 现可异步执行任意 argv 或明确 shell/script，支持 cwd、env、binary stdin、timeout 和 dry run；Job metadata 不再返回完整日志，改为有界 cursor 分页。
-- 新增 probe 驱动的 Virtual Switch、QTS system settings、firmware、notifications 与 Storage Manager MCP adapter 入口；未知 QTS 私有命令不会被猜测或伪造。
-- `nas_qnap_probe` 现运行随 QPKG 安装的 probe 脚本，并将真机 evidence 写入指定 NAS JSON 路径，adapter 配置不再依赖手动复制仓库脚本。
-- QPKG inventory 现在基于 `/proc` 将安装路径关联到运行进程，返回 `running` / `stopped` / `unknown` 与 PID，不再把运行状态留给人工 probe。
+v1.0.15 将旧版受限 NAS API 包装器升级为可信局域网内的 QNAP 本机控制平面：保留 Bearer Token 和 JSONL 审计，同时在 `full_trust` 下支持根文件系统、任意 argv、shell、Docker、QPKG 与系统管理。
+
+- 97 个 MCP 工具：文件、系统、进程、服务、Docker、QPKG、存储、RAID、SMART、网络、账户、共享目录、ACL、日志、UPS、异步 Job 与 QTS adapter。
+- 统一 command executor：明确非零退出、超时和启动错误；支持 cwd、环境变量、二进制 stdin、dry run 及有界输出。
+- binary-safe 文件读写、复制/移动/归档、符号链接边界校验，以及 `/proc` 驱动的 QPKG 运行状态与 PID 证据。
+- Container Station wrapper 发现、Docker/Compose 泛化调用与长任务 Job；QTS `qpkg_cli` 使用已验证的 `--start`、`--stop`、`--enable`、`--disable` 等参数。
+- QTS 私有功能不猜测命令：Virtual Switch、系统设置、固件、通知、Storage Manager、VM、HBS、iSCSI/LUN 与证书动作必须先经过 `nas_qnap_probe` 验证后配置 adapter。
+- QPKG 升级会结束 PID 文件遗失的旧 Agent，避免旧 0.3.x 服务继续占用端口。
+
+## 与旧版的差异
+
+| 范围 | v0.3.2 | v1.0.15 |
+| --- | --- | --- |
+| 系统命令 | 7 个 allowlist executable，禁止 shell | 任意 argv、shell pipeline、cwd/env/stdin；可区分失败、超时和输出截断 |
+| 文件 | 仅 `/share`，文本导向 | 根文件系统、base64 二进制 range I/O、目录/权限/归档/校验和 |
+| Docker | 基础容器操作与确认流程 | 运行时 wrapper 发现、完整 Docker/Compose argv、重建、网络/卷和异步任务 |
+| QPKG | 基础列表与动作 | 已验证的 QTS 参数、安装/移除/更新、运行 PID 和异步操作跟踪 |
+| NAS 管理 | 概览、进程、温度 | 存储、RAID/SMART、网络、用户/组、共享/ACL/NFS、日志、UPS、服务和电源 |
+
+完整逐项对比、真机验证范围及未声明支持的边界见 [v0.3 到 v1.0.15 对比](docs/v0.3-v1.0.15-comparison.md)。
 
 ## 安装
 
@@ -75,3 +75,4 @@ WebUI 只在当前页面输入状态保存 token；仪表盘显示 profile、平
 - [网络](docs/network.md)
 - [架构](docs/architecture.md)
 - [v1 审计](docs/v1-audit.md)
+- [v0.3 到 v1.0.15 对比](docs/v0.3-v1.0.15-comparison.md)
