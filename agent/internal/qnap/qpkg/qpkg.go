@@ -80,18 +80,71 @@ func Parse(r interface{ Read([]byte) (int, error) }) []map[string]string {
 	return out
 }
 func (s Service) Manage(ctx context.Context, name, action, path, url string) (qexec.Result, error) {
-	if name == "" && action != "update_all" {
-		return qexec.Result{}, errors.New("name is required")
+	if action == "restart" {
+		// qpkg_cli has no restart flag. Preserve argv boundaries and execute the
+		// documented stop/start pair instead of falling back to a shell string.
+		stopArgs, err := CommandArgs(name, "stop", path, url)
+		if err != nil {
+			return qexec.Result{}, err
+		}
+		if _, err := s.run(ctx, stopArgs); err != nil {
+			return qexec.Result{}, err
+		}
+		startArgs, err := CommandArgs(name, "start", path, url)
+		if err != nil {
+			return qexec.Result{}, err
+		}
+		return s.run(ctx, startArgs)
 	}
-	args := []string{action}
-	if path != "" {
-		args = append(args, path)
-	} else if url != "" {
-		args = append(args, url)
-	} else if name != "" {
-		args = append(args, name)
+	args, err := CommandArgs(name, action, path, url)
+	if err != nil {
+		return qexec.Result{}, err
 	}
+	return s.run(ctx, args)
+}
+
+func (s Service) run(ctx context.Context, args []string) (qexec.Result, error) {
 	return s.Exec.Run(ctx, qexec.Request{Argv: append([]string{"/sbin/qpkg_cli"}, args...), Timeout: s.Exec.DefaultTimeout, MaxOutput: s.Exec.MaxOutput})
+}
+
+// CommandArgs maps the public action names to the flags accepted by QTS
+// qpkg_cli. It intentionally does not accept arbitrary flags from callers.
+func CommandArgs(name, action, path, url string) ([]string, error) {
+	requireName := func() error {
+		if strings.TrimSpace(name) == "" {
+			return errors.New("name is required")
+		}
+		return nil
+	}
+	switch action {
+	case "start", "stop", "enable", "disable", "status", "download", "cancel", "remove":
+		if err := requireName(); err != nil {
+			return nil, err
+		}
+		flag := map[string]string{"start": "--start", "stop": "--stop", "enable": "--enable", "disable": "--disable", "status": "--status", "download": "--download", "cancel": "--cancel", "remove": "--remove"}[action]
+		return []string{flag, name}, nil
+	case "install_file":
+		if strings.TrimSpace(path) == "" {
+			return nil, errors.New("path is required for install_file")
+		}
+		return []string{"--manually", path}, nil
+	case "install_url":
+		if strings.TrimSpace(url) == "" {
+			return nil, errors.New("url is required for install_url")
+		}
+		return []string{"--url", url}, nil
+	case "update_all":
+		return []string{"--update_all"}, nil
+	case "clean":
+		return []string{"--clean"}, nil
+	case "add":
+		if err := requireName(); err != nil {
+			return nil, err
+		}
+		return []string{"--add", name}, nil
+	default:
+		return nil, errors.New("unsupported qpkg action")
+	}
 }
 func Destructive(action string) bool {
 	switch action {

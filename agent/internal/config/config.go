@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -230,5 +231,15 @@ func cleanPaths(paths []string) []string {
 }
 func boolPtr(v bool) *bool { return &v }
 func defaultDockerPaths() []string {
-	return []string{"/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker", "/share/CACHEDEV1_DATA/.qpkg/container-station/usr/bin/docker", "/share/CACHEDEV2_DATA/.qpkg/container-station/bin/docker", "/share/CACHEDEV2_DATA/.qpkg/container-station/usr/bin/docker", "/share/CACHEDEV3_DATA/.qpkg/container-station/bin/docker", "/share/CACHEDEV3_DATA/.qpkg/container-station/usr/bin/docker", "/share/CACHEDEV4_DATA/.qpkg/container-station/bin/docker", "/share/CACHEDEV4_DATA/.qpkg/container-station/usr/bin/docker", "/share/CACHEDEV5_DATA/.qpkg/container-station/bin/docker", "/share/CACHEDEV5_DATA/.qpkg/container-station/usr/bin/docker", "/usr/bin/docker", "/usr/local/bin/docker", "/bin/docker"}
+	paths := []string{}
+	for i := 1; i <= 8; i++ {
+		root := "/share/CACHEDEV" + strconv.Itoa(i) + "_DATA/.qpkg/container-station"
+		paths = append(paths,
+			root+"/bin/system-docker",
+			root+"/bin/docker",
+			root+"/usr/bin/docker",
+			root+"/usr/bin/.libs/docker",
+		)
+	}
+	return append(paths, "/usr/bin/docker", "/usr/local/bin/docker", "/bin/docker")
 }

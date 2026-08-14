@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	qexec "qnap-ai-control-suite/agent/internal/exec"
@@ -29,6 +30,11 @@ func (s Service) Discover(ctx context.Context) Result {
 	for _, name := range []string{"getcfg", "setcfg", "qpkg_cli", "getsysinfo", "docker", "smartctl", "mdadm", "zpool", "zfs", "ip", "systemctl"} {
 		if path := find(name); path != "" {
 			r.Utilities[name] = path
+		}
+	}
+	if _, ok := r.Utilities["docker"]; !ok {
+		if path := containerStationDocker(); path != "" {
+			r.Utilities["docker"] = path
 		}
 	}
 	if out, err := s.Exec.Run(ctx, qexec.Request{Argv: []string{"/sbin/getsysinfo", "model"}}); err == nil {
@@ -100,4 +106,17 @@ func qpkgFeature(installed, needles []string) Feature {
 		}
 	}
 	return Feature{Supported: false, Reason: "QPKG is not installed"}
+}
+
+func containerStationDocker() string {
+	for i := 1; i <= 8; i++ {
+		root := "/share/CACHEDEV" + strconv.Itoa(i) + "_DATA/.qpkg/container-station"
+		for _, relative := range []string{"bin/system-docker", "bin/docker", "usr/bin/docker", "usr/bin/.libs/docker"} {
+			path := filepath.Join(root, relative)
+			if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+				return path
+			}
+		}
+	}
+	return ""
 }

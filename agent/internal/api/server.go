@@ -461,7 +461,8 @@ func (s *Server) storage(w http.ResponseWriter, r *http.Request) {
 	pools, poolsErr := s.Storage.Pools(r.Context())
 	volumes, volumesErr := s.Storage.Volumes()
 	snapshots, snapshotsErr := s.Storage.Snapshots(r.Context())
-	s.ok(w, r, map[string]any{"disks": disks, "disks_error": errorText(disksErr), "raid_groups": raid, "raid_error": errorText(raidErr), "pools": pools, "pools_error": errorText(poolsErr), "volumes": volumes, "volumes_error": errorText(volumesErr), "snapshots": snapshots, "snapshots_error": errorText(snapshotsErr)})
+	qts, qtsErr := s.Storage.QTSInventory(r.Context())
+	s.ok(w, r, map[string]any{"qts": qts, "qts_error": errorText(qtsErr), "disks": disks, "disks_error": errorText(disksErr), "raid_groups": raid, "raid_error": errorText(raidErr), "pools": pools, "pools_error": errorText(poolsErr), "volumes": volumes, "volumes_error": errorText(volumesErr), "snapshots": snapshots, "snapshots_error": errorText(snapshotsErr)})
 }
 func (s *Server) storageRoute(w http.ResponseWriter, r *http.Request) bool {
 	path := strings.TrimPrefix(r.URL.Path, "/v1/storage/")
@@ -1005,8 +1006,11 @@ func (s *Server) qpkgList(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) qpkgManage(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name, Action, Path, URL string
-		DryRun                  bool
+		Name   string `json:"name"`
+		Action string `json:"action"`
+		Path   string `json:"path"`
+		URL    string `json:"url"`
+		DryRun bool   `json:"dry_run"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -1015,8 +1019,23 @@ func (s *Server) qpkgManage(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, 409, "confirmation_required", "operation requires confirmation in this profile", map[string]any{"action": req.Action})
 		return
 	}
+	if _, err := qpkg.CommandArgs(req.Name, req.Action, req.Path, req.URL); err != nil && req.Action != "restart" {
+		s.fail(w, r, 400, "invalid_qpkg_action", err.Error(), nil)
+		return
+	}
+	if req.Action == "restart" {
+		if _, err := qpkg.CommandArgs(req.Name, "start", req.Path, req.URL); err != nil {
+			s.fail(w, r, 400, "invalid_qpkg_action", err.Error(), nil)
+			return
+		}
+	}
 	if req.DryRun {
-		s.ok(w, r, map[string]any{"action": req.Action, "name": req.Name, "dry_run": true})
+		if req.Action == "restart" {
+			s.ok(w, r, map[string]any{"argv": [][]string{{"qpkg_cli", "--stop", req.Name}, {"qpkg_cli", "--start", req.Name}}, "dry_run": true})
+			return
+		}
+		args, _ := qpkg.CommandArgs(req.Name, req.Action, req.Path, req.URL)
+		s.ok(w, r, map[string]any{"argv": append([]string{"qpkg_cli"}, args...), "dry_run": true})
 		return
 	}
 	result, err := s.QPKG.Manage(r.Context(), req.Name, req.Action, req.Path, req.URL)

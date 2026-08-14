@@ -88,3 +88,15 @@ func TestStructuredSystemResourcesAndJobs(t *testing.T) {
 		t.Fatalf("job status=%d body=%s", w.Code, w.Body.String())
 	}
 }
+
+func TestQPKGDryRunUsesDocumentedFlags(t *testing.T) {
+	s, token := testServer(t)
+	w := request(t, s, token, http.MethodPost, "/v1/qnap/qpkg/manage", `{"name":"container-station","action":"start","dry_run":true}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"--start"`) {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, s, token, http.MethodPost, "/v1/qnap/qpkg/manage", `{"action":"invalid","dry_run":true}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "invalid_qpkg_action") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}

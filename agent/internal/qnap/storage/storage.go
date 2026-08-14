@@ -42,6 +42,22 @@ type Snapshot struct {
 	Raw                             map[string]any
 }
 
+func (s Service) QTSInventory(ctx context.Context) (map[string]any, error) {
+	path := qcli()
+	if path == "" {
+		return map[string]any{"supported": false, "reason": "qcli_storage was not discovered"}, nil
+	}
+	out := map[string]any{"supported": true, "backend": "qts-qcli"}
+	for key, args := range map[string][]string{"pools": {"-p"}, "volumes": {"-v"}, "disks": {"-d"}} {
+		result, err := s.Exec.Run(ctx, qexec.Request{Argv: append([]string{path}, args...), Timeout: 30 * time.Second, MaxOutput: s.Exec.MaxOutput})
+		if err != nil {
+			return out, err
+		}
+		out[key] = result
+	}
+	return out, nil
+}
+
 func (s Service) Disks() ([]Disk, error) {
 	entries, err := os.ReadDir("/sys/block")
 	if err != nil {
@@ -227,6 +243,9 @@ func zpool() string {
 }
 func zfs() string {
 	return executable([]string{"/sbin/zfs", "/usr/sbin/zfs", "/bin/zfs", "/usr/bin/zfs"})
+}
+func qcli() string {
+	return executable([]string{"/sbin/qcli_storage", "/usr/sbin/qcli_storage", "/bin/qcli_storage", "/usr/bin/qcli_storage"})
 }
 func executable(paths []string) string {
 	for _, path := range paths {
