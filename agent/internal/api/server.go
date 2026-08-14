@@ -721,6 +721,7 @@ func (s *Server) command(w http.ResponseWriter, r *http.Request, args []string) 
 type execRequest struct {
 	Argv        []string          `json:"argv"`
 	Shell       string            `json:"shell"`
+	Script      string            `json:"script"`
 	CWD         string            `json:"cwd"`
 	Env         map[string]string `json:"env"`
 	StdinBase64 string            `json:"stdin_base64"`
@@ -744,11 +745,28 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request, shell bool) {
 			s.fail(w, r, 403, "shell_disabled", "shell execution is disabled", nil)
 			return
 		}
-		if req.Shell == "" {
-			s.fail(w, r, 400, "invalid_request", "shell is required", nil)
+		if req.Script != "" {
+			path := req.Shell
+			if path == "" {
+				path = detectShell()
+			}
+			if path == "" {
+				s.fail(w, r, 503, "shell_unavailable", "no supported shell was found", nil)
+				return
+			}
+			req.Argv = []string{path, "-c", req.Script}
+		} else if req.Shell == "" {
+			s.fail(w, r, 400, "invalid_request", "script is required", nil)
 			return
+		} else {
+			// Legacy request shape: shell is the script and /bin/sh is selected.
+			path := detectShell()
+			if path == "" {
+				s.fail(w, r, 503, "shell_unavailable", "no supported shell was found", nil)
+				return
+			}
+			req.Argv = []string{path, "-c", req.Shell}
 		}
-		req.Argv = []string{"/bin/sh", "-c", req.Shell}
 	}
 	stdin := []byte(req.Stdin)
 	if req.StdinBase64 != "" {
@@ -761,6 +779,14 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request, shell bool) {
 	}
 	result, err := s.run(r, req.Argv, qexec.Request{CWD: req.CWD, Env: req.Env, Stdin: stdin, Timeout: time.Duration(req.TimeoutSec) * time.Second, MaxOutput: req.MaxOutput, DryRun: req.DryRun})
 	s.respondCommand(w, r, result, err)
+}
+func detectShell() string {
+	for _, path := range []string{"/bin/sh", "/bin/ash", "/bin/bash"} {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+			return path
+		}
+	}
+	return ""
 }
 func (s *Server) run(r *http.Request, argv []string, req qexec.Request) (qexec.Result, error) {
 	if len(argv) == 0 {

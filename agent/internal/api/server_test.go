@@ -77,6 +77,14 @@ func TestFullTrustShell(t *testing.T) {
 	}
 }
 
+func TestShellSupportsExplicitShellAndScript(t *testing.T) {
+	s, token := testServer(t)
+	w := request(t, s, token, http.MethodPost, "/v1/shell", `{"shell":"/bin/sh","script":"printf works"}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "works") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestStructuredSystemResourcesAndJobs(t *testing.T) {
 	s, token := testServer(t)
 	w := request(t, s, token, http.MethodGet, "/v1/system/resources", "")
