@@ -234,7 +234,12 @@ func (s Service) Smart(ctx context.Context, id string) (map[string]any, error) {
 	}
 	path := smartctl()
 	if path == "" {
-		return map[string]any{"supported": false, "reason": "smartctl not found by runtime probe", "disk": d}, nil
+		return map[string]any{
+			"supported": false,
+			"reason":    "smartctl not installed; checked /sbin, /usr/sbin, /usr/bin, /bin, /usr/local/sbin, /usr/local/bin",
+			"disk":      d,
+			"fallback":  smartSysfsFallback(d),
+		}, nil
 	}
 	result, err := s.Exec.Run(ctx, qexec.Request{Argv: []string{path, "-j", "-a", d.Path}, Timeout: 45 * time.Second, MaxOutput: s.Exec.MaxOutput})
 	if err != nil {
@@ -256,7 +261,7 @@ func (s Service) StartSmart(ctx context.Context, id, kind string) (qexec.Result,
 	}
 	path := smartctl()
 	if path == "" {
-		return qexec.Result{}, errors.New("smartctl not found by runtime probe")
+		return qexec.Result{}, errors.New("smartctl not installed; QTS smart test requires authenticated QCLI session")
 	}
 	return s.Exec.Run(ctx, qexec.Request{Argv: []string{path, "-t", kind, d.Path}, Timeout: 30 * time.Second, MaxOutput: s.Exec.MaxOutput})
 }
@@ -471,7 +476,21 @@ func (s Service) QTSSnapshotCapabilities() map[string]any {
 	if path == "" {
 		return map[string]any{"supported": false, "reason": "QTS snapshot_util was not discovered"}
 	}
-	return map[string]any{"supported": true, "backend": "qts-snapshot_util", "operations": []string{"create"}, "reason": "list/delete/restore require further runtime probe"}
+	out := map[string]any{
+		"supported":  true,
+		"backend":    "qts-snapshot_util",
+		"operations": []string{"create"},
+		"reason":     "snapshot_util supports create; list/delete/restore require an authenticated QCLI session",
+	}
+	if qcli := qcliVolumesnapshot(); qcli != "" {
+		out["qcli_backend"] = map[string]any{
+			"backend":    "qts-qcli_volumesnapshot",
+			"operations": []string{"list", "delete", "restore", "clone"},
+			"supported":  false,
+			"reason":     "qcli_volumesnapshot found, but requires an authenticated QCLI session (qcli -l sid or saved auth) before MCP can invoke it",
+		}
+	}
+	return out
 }
 
 // CreateQTSSnapshot uses QTS snapshot_util commands observed on the NAS:
@@ -516,7 +535,7 @@ func transport(name string) string {
 	return "virtual"
 }
 func smartctl() string {
-	return executable([]string{"/sbin/smartctl", "/usr/sbin/smartctl", "/bin/smartctl", "/usr/bin/smartctl"})
+	return executable([]string{"/sbin/smartctl", "/usr/sbin/smartctl", "/usr/bin/smartctl", "/bin/smartctl", "/usr/local/sbin/smartctl", "/usr/local/bin/smartctl"})
 }
 func zpool() string {
 	return executable([]string{"/sbin/zpool", "/usr/sbin/zpool", "/bin/zpool", "/usr/bin/zpool"})
@@ -530,6 +549,9 @@ func qcli() string {
 func snapshotUtil() string {
 	return executable([]string{"/sbin/snapshot_util", "/usr/sbin/snapshot_util", "/bin/snapshot_util", "/usr/bin/snapshot_util"})
 }
+func qcliVolumesnapshot() string {
+	return executable([]string{"/sbin/qcli_volumesnapshot", "/usr/sbin/qcli_volumesnapshot", "/usr/bin/qcli_volumesnapshot"})
+}
 func executable(paths []string) string {
 	for _, path := range paths {
 		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
@@ -537,6 +559,16 @@ func executable(paths []string) string {
 		}
 	}
 	return ""
+}
+func smartSysfsFallback(d Disk) map[string]any {
+	attrs := map[string]any{}
+	base := filepath.Join("/sys/block", d.ID)
+	for _, name := range []string{"device/state", "device/queue_depth", "device/wwid", "queue/scheduler"} {
+		if value := read(base, name); value != "" {
+			attrs[name] = value
+		}
+	}
+	return map[string]any{"note": "smartctl is not installed; sysfs attributes only", "sysfs": attrs}
 }
 func volumeBackend(fs string) string {
 	if fs == "zfs" {

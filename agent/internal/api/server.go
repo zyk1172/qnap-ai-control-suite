@@ -820,7 +820,11 @@ func (s *Server) shareRoute(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		result, err := s.Shares.ACL(r.Context(), req.Path)
-		s.respondCommand(w, r, result, err)
+		if err != nil {
+			s.respondCommand(w, r, qexec.Result{}, err)
+			return true
+		}
+		s.ok(w, r, result)
 		return true
 	case "/v1/acl/set":
 		var req struct {

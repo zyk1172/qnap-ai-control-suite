@@ -2,10 +2,16 @@
 
 QNAP AI Control Suite v1 是面向 Codex、OpenClaw、Hermes 与其他 MCP client 的 QNAP 本地控制平面。它在 NAS 上运行一个单二进制 Go agent，并在 Mac 上通过官方 MCP SDK 提供 stdio bridge。
 
-## v1.0.15
+## v1.0.16
 
-v1.0.15 将旧版受限 NAS API 包装器升级为可信局域网内的 QNAP 本机控制平面：保留 Bearer Token 和 JSONL 审计，同时在 `full_trust` 下支持根文件系统、任意 argv、shell、Docker、QPKG 与系统管理。
+v1.0.16 将旧版受限 NAS API 包装器升级为可信局域网内的 QNAP 本机控制平面：保留 Bearer Token 和 JSONL 审计，同时在 `full_trust` 下支持根文件系统、任意 argv、shell、Docker、QPKG 与系统管理。
 
+- 进程清单改为直接读取 `/proc`，不再依赖 QNAP busybox `ps -o` 的不兼容输出。
+- `nas_service_list` 在无 systemd 的 QTS 上返回 QPKG 服务清单，`nas_service_action` 走已验证的 `qpkg_cli`。
+- ACL 自动查找 QNAP 的 `/usr/bin/getfacl`/`setfacl`；工具缺失时返回 stat 降级而不是原始 `start_failed`。
+- UPS 能力状态与 reason 一致；SMART 路径扩展并返回 sysfs 降级与真实缺失说明。
+- QTS 快照能力如实区分 `snapshot_util` create 与需要认证 QCLI 会话的 list/delete/restore。
+- QNAP 无 path 的系统共享标记为 `system_share`，不再让 `TMBackup` 看起来像普通空路径。
 - 97 个 MCP 工具：文件、系统、进程、服务、Docker、QPKG、存储、RAID、SMART、网络、账户、共享目录、ACL、日志、UPS、异步 Job 与 QTS adapter。
 - 统一 command executor：明确非零退出、超时和启动错误；支持 cwd、环境变量、二进制 stdin、dry run 及有界输出。
 - binary-safe 文件读写、复制/移动/归档、符号链接边界校验，以及 `/proc` 驱动的 QPKG 运行状态与 PID 证据。
@@ -33,7 +39,7 @@ v1.0.15 将旧版受限 NAS API 包装器升级为可信局域网内的 QNAP 本
 ./scripts/package_qpkg.sh amd64
 ```
 
-将 `dist/QnapAIControl_1.0.15.qpkg` 上传到 App Center 手动安装。首次启动会生成 bearer token 和 `full_trust` 配置。打开：
+将 `dist/QnapAIControl_1.0.16.qpkg` 上传到 App Center 手动安装。首次启动会生成 bearer token 和 `full_trust` 配置。打开：
 
 ```text
 http://NAS_IP:8756/

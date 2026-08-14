@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	qpkg "qnap-ai-control-suite/agent/internal/qnap/qpkg"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -18,7 +20,12 @@ import (
 	qexec "qnap-ai-control-suite/agent/internal/exec"
 )
 
-type Service struct{ Exec qexec.Executor }
+type Service struct {
+	Exec           qexec.Executor
+	ProcRoot       string
+	QPKGConfigPath string
+	QPKGCliPath    string
+}
 type Info struct {
 	Hostname      string            `json:"hostname"`
 	Kernel        string            `json:"kernel"`
@@ -48,9 +55,11 @@ type Process struct {
 	PPID    int    `json:"ppid,omitempty"`
 }
 type Unit struct {
-	Name   string `json:"name"`
-	State  string `json:"state"`
-	Source string `json:"source"`
+	Name    string `json:"name"`
+	State   string `json:"state"`
+	Source  string `json:"source"`
+	Script  string `json:"script,omitempty"`
+	Enabled bool   `json:"enabled,omitempty"`
 }
 type Socket struct {
 	Protocol string `json:"protocol"`
@@ -105,21 +114,7 @@ func (s Service) Sockets() ([]Socket, error) {
 	return items, nil
 }
 func (s Service) Processes(ctx context.Context) ([]Process, error) {
-	result, err := s.Exec.Run(ctx, qexec.Request{Argv: []string{"/bin/ps", "-eo", "pid=,ppid=,user=,state=,args="}, Timeout: 15 * time.Second, MaxOutput: 8 * 1024 * 1024})
-	if err != nil {
-		return nil, err
-	}
-	out := []Process{}
-	for _, line := range strings.Split(strings.TrimSpace(result.Stdout), "\n") {
-		f := strings.Fields(line)
-		if len(f) < 5 {
-			continue
-		}
-		pid, _ := strconv.Atoi(f[0])
-		ppid, _ := strconv.Atoi(f[1])
-		out = append(out, Process{PID: pid, PPID: ppid, User: f[2], State: f[3], Command: strings.Join(f[4:], " ")})
-	}
-	return out, nil
+	return readProcesses(s.procRoot(), loadUsers("/etc/passwd"))
 }
 func (s Service) Signal(pid int, signal string) error {
 	if pid <= 1 {
@@ -146,7 +141,10 @@ func (s Service) Services(ctx context.Context) ([]Unit, error) {
 		}
 		return out, nil
 	}
-	return nil, errors.New("no stable service manager detected; use nas_exec after qnap probe")
+	if s.qpkgCLI() != "" && fileExists(s.qpkgConfig()) {
+		return parseQPKGUnits(s.qpkgConfig())
+	}
+	return nil, errors.New("no stable service manager detected; QNAP QPKG system not found")
 }
 func (s Service) ServiceAction(ctx context.Context, name, action string) (qexec.Result, error) {
 	if name == "" || strings.ContainsAny(name, "/\\\x00") {
@@ -159,9 +157,165 @@ func (s Service) ServiceAction(ctx context.Context, name, action string) (qexec.
 	}
 	path, err := exec.LookPath("systemctl")
 	if err != nil {
-		return qexec.Result{}, errors.New("no stable service manager detected; use nas_exec after qnap probe")
+		if s.qpkgCLI() == "" || !fileExists(s.qpkgConfig()) {
+			return qexec.Result{}, errors.New("no stable service manager detected; QNAP QPKG system not found")
+		}
+		return qpkg.Service{Exec: s.Exec, Path: s.qpkgConfig()}.Manage(ctx, name, action, "", "")
 	}
 	return s.Exec.Run(ctx, qexec.Request{Argv: []string{path, action, name}, Timeout: 60 * time.Second, MaxOutput: s.Exec.MaxOutput})
+}
+func (s Service) procRoot() string {
+	if s.ProcRoot != "" {
+		return s.ProcRoot
+	}
+	return "/proc"
+}
+func (s Service) qpkgConfig() string {
+	if s.QPKGConfigPath != "" {
+		return s.QPKGConfigPath
+	}
+	return "/etc/config/qpkg.conf"
+}
+func (s Service) qpkgCLI() string {
+	path := s.QPKGCliPath
+	if path == "" {
+		path = "/sbin/qpkg_cli"
+	}
+	if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+		return path
+	}
+	return ""
+}
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+func loadUsers(path string) map[string]string {
+	users := map[string]string{}
+	f, err := os.Open(path)
+	if err != nil {
+		return users
+	}
+	defer f.Close()
+	scan := bufio.NewScanner(f)
+	for scan.Scan() {
+		fields := strings.Split(scan.Text(), ":")
+		if len(fields) >= 3 {
+			users[fields[2]] = fields[0]
+		}
+	}
+	return users
+}
+func readProcesses(root string, users map[string]string) ([]Process, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	out := []Process{}
+	for _, entry := range entries {
+		if !entry.IsDir() || !isNumeric(entry.Name()) {
+			continue
+		}
+		pid, _ := strconv.Atoi(entry.Name())
+		if pid <= 0 {
+			continue
+		}
+		base := filepath.Join(root, entry.Name())
+		statBytes, statErr := os.ReadFile(filepath.Join(base, "stat"))
+		if statErr != nil {
+			continue
+		}
+		comm, state, ppid := parseProcStat(string(statBytes))
+		cmdline, _ := os.ReadFile(filepath.Join(base, "cmdline"))
+		status, _ := os.ReadFile(filepath.Join(base, "status"))
+		out = append(out, Process{
+			PID:     pid,
+			PPID:    ppid,
+			State:   state,
+			User:    processUser(string(status), users),
+			Command: processCommand(comm, string(cmdline)),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].PID < out[j].PID })
+	return out, nil
+}
+func parseProcStat(raw string) (comm, state string, ppid int) {
+	start := strings.Index(raw, "(")
+	end := strings.LastIndex(raw, ")")
+	if start < 0 || end < 0 || end <= start {
+		return "", "", 0
+	}
+	comm = strings.TrimSpace(raw[start+1 : end])
+	fields := strings.Fields(raw[end+1:])
+	if len(fields) >= 2 {
+		state = fields[0]
+		ppid, _ = strconv.Atoi(fields[1])
+	}
+	return comm, state, ppid
+}
+func processUser(status string, users map[string]string) string {
+	for _, line := range strings.Split(status, "\n") {
+		if !strings.HasPrefix(line, "Uid:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return ""
+		}
+		if name, ok := users[fields[1]]; ok {
+			return name
+		}
+		return fields[1]
+	}
+	return ""
+}
+func processCommand(comm, cmdline string) string {
+	if value := strings.TrimSpace(strings.ReplaceAll(cmdline, "\x00", " ")); value != "" {
+		return value
+	}
+	if comm != "" {
+		return "[" + comm + "]"
+	}
+	return ""
+}
+func isNumeric(value string) bool {
+	_, err := strconv.Atoi(value)
+	return err == nil
+}
+func parseQPKGUnits(path string) ([]Unit, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	out := []Unit{}
+	var current *Unit
+	scan := bufio.NewScanner(f)
+	for scan.Scan() {
+		line := strings.TrimSpace(scan.Text())
+		if len(line) > 2 && line[0] == '[' && line[len(line)-1] == ']' {
+			out = append(out, Unit{Name: line[1 : len(line)-1], State: "disabled", Source: "qnap-qpkg"})
+			current = &out[len(out)-1]
+			continue
+		}
+		if current == nil || !strings.Contains(line, "=") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		key, value := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+		switch strings.ToLower(key) {
+		case "enable":
+			current.Enabled = strings.EqualFold(value, "TRUE")
+			if current.Enabled {
+				current.State = "enabled"
+			}
+		case "shell", "alt_shell":
+			if current.Script == "" {
+				current.Script = value
+			}
+		}
+	}
+	return out, scan.Err()
 }
 func readMemInfo() map[string]uint64 {
 	out := map[string]uint64{}
