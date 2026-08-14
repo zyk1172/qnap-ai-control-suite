@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import test from "node:test";
+import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 
 test("official MCP server negotiates and lists v1 tools", async () => {
   const child = spawn(process.execPath, ["src/server.js"], { cwd: new URL("..", import.meta.url), stdio: ["pipe", "pipe", "pipe"] });
@@ -19,7 +20,7 @@ test("official MCP server negotiates and lists v1 tools", async () => {
     });
     child.once("error", reject);
   });
-  child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } } })}\n`);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "test", version: "1" } } })}\n`);
   child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })}\n`);
   await responses;
   child.kill("SIGTERM");
