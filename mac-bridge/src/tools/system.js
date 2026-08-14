@@ -8,6 +8,8 @@ export function registerSystemTools(server) {
   register(server, "nas_discovery", "Discover QNAP platform, utilities, QPKGs and runtime capability states.", {}, () => request("GET", "/v1/qnap/discovery"), { readOnlyHint: true });
   register(server, "nas_system_info", "Read system overview.", {}, () => request("GET", "/v1/system/overview"), { readOnlyHint: true });
   register(server, "nas_system_resources", "Read load and resources.", {}, () => request("GET", "/v1/system/resources"), { readOnlyHint: true });
+  register(server, "nas_system_sockets", "List active TCP/UDP sockets from the NAS /proc tables.", {}, () => request("GET", "/v1/system/sockets"), { readOnlyHint: true });
+  register(server, "nas_system_ntp", "Read configured NTP/chrony servers and source file when available.", {}, () => request("GET", "/v1/system/ntp"), { readOnlyHint: true });
   register(server, "nas_process_list", "List NAS processes.", {}, () => request("GET", "/v1/system/processes"), { readOnlyHint: true });
   register(server, "nas_process_action", "Send a signal to a process. PID 1 and invalid signals are refused by the agent.", { pid: z.number().int().positive(), signal: z.enum(["TERM", "KILL", "HUP", "INT", "STOP", "CONT"]) }, (args) => request("POST", "/v1/system/process/action", args), { destructiveHint: true });
   register(server, "nas_service_list", "List services from the detected system service manager.", {}, () => request("GET", "/v1/system/services"), { readOnlyHint: true });

@@ -161,6 +161,10 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request) {
 		s.systemInfo(w, r)
 	case "/v1/system/resources":
 		s.systemResources(w, r)
+	case "/v1/system/sockets":
+		s.systemSockets(w, r)
+	case "/v1/system/ntp":
+		s.systemNTP(w, r)
 	case "/v1/system/processes":
 		s.systemProcesses(w, r)
 	case "/v1/system/process/action":
@@ -303,7 +307,23 @@ func (s *Server) systemResources(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, 500, "system_resources_failed", err.Error(), nil)
 		return
 	}
-	s.ok(w, r, map[string]any{"uptime_seconds": info.UptimeSeconds, "load_average": info.LoadAverage, "memory_bytes": info.Memory, "time": info.Time, "timezone": info.Timezone})
+	s.ok(w, r, map[string]any{"uptime_seconds": info.UptimeSeconds, "load_average": info.LoadAverage, "memory_bytes": info.Memory, "swap_bytes": info.Swap, "time": info.Time, "timezone": info.Timezone, "cpu_count": info.CPUCount})
+}
+func (s *Server) systemSockets(w http.ResponseWriter, r *http.Request) {
+	items, err := s.System.Sockets()
+	if err != nil {
+		s.fail(w, r, 501, "socket_inventory_unavailable", err.Error(), nil)
+		return
+	}
+	s.ok(w, r, map[string]any{"sockets": items})
+}
+func (s *Server) systemNTP(w http.ResponseWriter, r *http.Request) {
+	info, err := s.System.Info(r.Context())
+	if err != nil {
+		s.fail(w, r, 500, "system_info_failed", err.Error(), nil)
+		return
+	}
+	s.ok(w, r, info.NTP)
 }
 func (s *Server) systemProcesses(w http.ResponseWriter, r *http.Request) {
 	items, err := s.System.Processes(r.Context())

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,12 +23,15 @@ type Info struct {
 	Hostname      string            `json:"hostname"`
 	Kernel        string            `json:"kernel"`
 	Architecture  string            `json:"architecture"`
+	CPUCount      int               `json:"cpu_count"`
 	Time          string            `json:"time"`
 	Timezone      string            `json:"timezone"`
 	UptimeSeconds float64           `json:"uptime_seconds"`
 	LoadAverage   []float64         `json:"load_average"`
 	Memory        map[string]uint64 `json:"memory_bytes"`
+	Swap          map[string]uint64 `json:"swap_bytes"`
 	Mounts        []Mount           `json:"mounts"`
+	NTP           NTP               `json:"ntp"`
 	QNAP          map[string]any    `json:"qnap,omitempty"`
 }
 type Mount struct {
@@ -48,10 +52,23 @@ type Unit struct {
 	State  string `json:"state"`
 	Source string `json:"source"`
 }
+type Socket struct {
+	Protocol string `json:"protocol"`
+	Local    string `json:"local"`
+	Remote   string `json:"remote"`
+	State    string `json:"state"`
+	Inode    string `json:"inode,omitempty"`
+}
+type NTP struct {
+	Configured bool     `json:"configured"`
+	Servers    []string `json:"servers"`
+	Source     string   `json:"source,omitempty"`
+}
 
 func (s Service) Info(ctx context.Context) (Info, error) {
 	host, _ := os.Hostname()
-	info := Info{Hostname: host, Architecture: runtime.GOARCH, Time: time.Now().Format(time.RFC3339), Memory: readMemInfo(), Mounts: readMounts()}
+	memory := readMemInfo()
+	info := Info{Hostname: host, Architecture: runtime.GOARCH, CPUCount: runtime.NumCPU(), Time: time.Now().Format(time.RFC3339), Memory: memory, Swap: map[string]uint64{"total": memory["SwapTotal"], "free": memory["SwapFree"], "cached": memory["SwapCached"]}, Mounts: readMounts(), NTP: readNTP()}
 	if out, err := s.Exec.Run(ctx, qexec.Request{Argv: []string{"/bin/uname", "-r"}, Timeout: 5 * time.Second}); err == nil {
 		info.Kernel = strings.TrimSpace(out.Stdout)
 	}
@@ -69,6 +86,23 @@ func (s Service) Info(ctx context.Context) (Info, error) {
 	}
 	info.Timezone = timezone()
 	return info, nil
+}
+func (s Service) Sockets() ([]Socket, error) {
+	items := []Socket{}
+	opened := false
+	for _, input := range []struct{ protocol, path string }{{"tcp", "/proc/net/tcp"}, {"tcp6", "/proc/net/tcp6"}, {"udp", "/proc/net/udp"}, {"udp6", "/proc/net/udp6"}} {
+		f, err := os.Open(input.path)
+		if err != nil {
+			continue
+		}
+		opened = true
+		items = append(items, parseSockets(input.protocol, f)...)
+		_ = f.Close()
+	}
+	if !opened {
+		return nil, errors.New("/proc network socket tables are unavailable")
+	}
+	return items, nil
 }
 func (s Service) Processes(ctx context.Context) ([]Process, error) {
 	result, err := s.Exec.Run(ctx, qexec.Request{Argv: []string{"/bin/ps", "-eo", "pid=,ppid=,user=,state=,args="}, Timeout: 15 * time.Second, MaxOutput: 8 * 1024 * 1024})
@@ -173,11 +207,76 @@ func timezone() string {
 	}
 	return ""
 }
+func readNTP() NTP {
+	for _, path := range []string{"/etc/ntp.conf", "/etc/chrony.conf", "/etc/config/ntp.conf"} {
+		f, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+		servers := parseNTP(f)
+		_ = f.Close()
+		return NTP{Configured: len(servers) > 0, Servers: servers, Source: path}
+	}
+	return NTP{Servers: []string{}}
+}
+func parseNTP(r io.Reader) []string {
+	servers := []string{}
+	seen := map[string]bool{}
+	scan := bufio.NewScanner(r)
+	for scan.Scan() {
+		line := strings.TrimSpace(strings.SplitN(scan.Text(), "#", 2)[0])
+		fields := strings.Fields(line)
+		if len(fields) < 2 || (fields[0] != "server" && fields[0] != "pool") || seen[fields[1]] {
+			continue
+		}
+		seen[fields[1]] = true
+		servers = append(servers, fields[1])
+	}
+	return servers
+}
+func parseSockets(protocol string, r io.Reader) []Socket {
+	out := []Socket{}
+	scan := bufio.NewScanner(r)
+	first := true
+	for scan.Scan() {
+		if first {
+			first = false
+			continue
+		}
+		fields := strings.Fields(scan.Text())
+		if len(fields) < 10 {
+			continue
+		}
+		out = append(out, Socket{Protocol: protocol, Local: procAddress(fields[1]), Remote: procAddress(fields[2]), State: fields[3], Inode: fields[9]})
+	}
+	return out
+}
+func procAddress(value string) string {
+	parts := strings.SplitN(value, ":", 2)
+	if len(parts) != 2 {
+		return value
+	}
+	port, err := strconv.ParseUint(parts[1], 16, 16)
+	if err != nil {
+		return value
+	}
+	host := parts[0]
+	if len(host) == 8 {
+		bytes := make([]string, 0, 4)
+		for i := 6; i >= 0; i -= 2 {
+			octet, err := strconv.ParseUint(host[i:i+2], 16, 8)
+			if err != nil {
+				return value
+			}
+			bytes = append(bytes, strconv.FormatUint(octet, 10))
+		}
+		host = strings.Join(bytes, ".")
+	}
+	return fmt.Sprintf("%s:%d", host, port)
+}
 func min(a, b int) int {
 	if a < b {
 		return a
 	}
 	return b
 }
-
-var _ = fmt.Sprintf
