@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"bufio"
 	"context"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ type Result struct {
 	Features   map[string]Feature `json:"features"`
 	Utilities  map[string]string  `json:"utilities"`
 	QPKGConfig bool               `json:"qpkg_config"`
+	QPKGs      []string           `json:"qpkgs"`
 }
 type Feature struct {
 	Supported bool   `json:"supported"`
@@ -23,7 +25,7 @@ type Feature struct {
 }
 
 func (s Service) Discover(ctx context.Context) Result {
-	r := Result{Platform: "qts_or_linux", Features: map[string]Feature{}, Utilities: map[string]string{}, QPKGConfig: fileExists("/etc/config/qpkg.conf")}
+	r := Result{Platform: "qts_or_linux", Features: map[string]Feature{}, Utilities: map[string]string{}, QPKGConfig: fileExists("/etc/config/qpkg.conf"), QPKGs: installedQPKGs("/etc/config/qpkg.conf")}
 	for _, name := range []string{"getcfg", "setcfg", "qpkg_cli", "getsysinfo", "docker", "smartctl", "mdadm", "zpool", "zfs", "ip", "systemctl"} {
 		if path := find(name); path != "" {
 			r.Utilities[name] = path
@@ -37,7 +39,7 @@ func (s Service) Discover(ctx context.Context) Result {
 	} else if r.QPKGConfig {
 		r.Platform = "qts"
 	}
-	for key, needs := range map[string][]string{"docker": {"docker"}, "smart": {"smartctl"}, "raid": {"mdadm"}, "zfs": {"zpool", "zfs"}, "virtualization_station": {"qpkg_cli"}, "hbs3": {"qpkg_cli"}, "virtual_switch": {"getcfg"}} {
+	for key, needs := range map[string][]string{"docker": {"docker"}, "smart": {"smartctl"}, "raid": {"mdadm"}, "zfs": {"zpool", "zfs"}, "virtual_switch": {"getcfg"}} {
 		supported := true
 		for _, need := range needs {
 			if _, ok := r.Utilities[need]; !ok {
@@ -50,6 +52,11 @@ func (s Service) Discover(ctx context.Context) Result {
 		}
 		r.Features[key] = Feature{Supported: supported, Reason: reason}
 	}
+	r.Features["virtualization_station"] = qpkgFeature(r.QPKGs, []string{"virtualizationstation", "virtualization station"})
+	r.Features["hbs3"] = qpkgFeature(r.QPKGs, []string{"hybrid backup", "hbs"})
+	r.Features["iscsi"] = Feature{Supported: false, Reason: "QNAP runtime probe required for stable iSCSI adapter"}
+	r.Features["certificates"] = Feature{Supported: false, Reason: "QNAP runtime probe required for certificate inventory adapter"}
+	r.Features["ups"] = Feature{Supported: find("upsc") != "", Reason: "NUT upsc utility not found"}
 	return r
 }
 func find(name string) string {
@@ -67,3 +74,30 @@ func find(name string) string {
 	return ""
 }
 func fileExists(path string) bool { _, err := os.Stat(path); return err == nil }
+func installedQPKGs(path string) []string {
+	f, err := os.Open(path)
+	if err != nil {
+		return []string{}
+	}
+	defer f.Close()
+	out := []string{}
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if len(line) > 2 && line[0] == '[' && line[len(line)-1] == ']' {
+			out = append(out, line[1:len(line)-1])
+		}
+	}
+	return out
+}
+func qpkgFeature(installed, needles []string) Feature {
+	for _, item := range installed {
+		lower := strings.ToLower(item)
+		for _, needle := range needles {
+			if strings.Contains(lower, needle) {
+				return Feature{Supported: false, Reason: "QPKG detected; stable local adapter requires runtime probe"}
+			}
+		}
+	}
+	return Feature{Supported: false, Reason: "QPKG is not installed"}
+}

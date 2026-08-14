@@ -12,8 +12,8 @@ QNAP TS-264C 使用 amd64：
 脚本从仓库 `VERSION` 读取版本，并注入 agent、QPKG 元数据和 artifact 名。正式包输出为：
 
 ```text
-dist/QnapAIControl_1.0.0.qpkg
-dist/QnapAIControl_1.0.0.qpkg.md5
+dist/QnapAIControl_1.0.1.qpkg
+dist/QnapAIControl_1.0.1.qpkg.md5
 ```
 
 需要 QNAP QDK `qbuild`。没有 QDK 时只会生成 staging archive，不能上传 App Center。

@@ -5,13 +5,21 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	qexec "qnap-ai-control-suite/agent/internal/exec"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type Service struct {
 	Exec qexec.Executor
 	Path string
+}
+type Inventory struct {
+	Packages []map[string]string `json:"packages"`
+	CLI      *qexec.Result       `json:"qpkg_cli,omitempty"`
+	CLIError string              `json:"qpkg_cli_error,omitempty"`
 }
 
 func (s Service) List(ctx context.Context) ([]map[string]string, error) {
@@ -25,6 +33,32 @@ func (s Service) List(ctx context.Context) ([]map[string]string, error) {
 	}
 	defer f.Close()
 	return Parse(f), nil
+}
+func (s Service) Inventory(ctx context.Context) (Inventory, error) {
+	packages, err := s.List(ctx)
+	if err != nil {
+		return Inventory{}, err
+	}
+	out := Inventory{Packages: packages}
+	result, runErr := s.Exec.Run(ctx, qexec.Request{Argv: []string{"/sbin/qpkg_cli", "-l"}, Timeout: 20 * time.Second, MaxOutput: s.Exec.MaxOutput})
+	if runErr != nil {
+		out.CLIError = runErr.Error()
+	} else {
+		out.CLI = &result
+	}
+	for _, pkg := range out.Packages {
+		if root := pkg["Install_Path"]; root != "" {
+			script := filepath.Join(root, ".install")
+			if _, err := os.Stat(script); err == nil {
+				pkg["init_script"] = script
+			}
+			pkg["process_state"] = "runtime process verification requires QNAP probe"
+		}
+		if value := pkg["Enable"]; value != "" {
+			pkg["enabled"] = strconv.FormatBool(strings.EqualFold(value, "TRUE"))
+		}
+	}
+	return out, nil
 }
 func Parse(r interface{ Read([]byte) (int, error) }) []map[string]string {
 	scanner := bufio.NewScanner(r)

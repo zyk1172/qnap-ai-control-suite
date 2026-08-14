@@ -62,3 +62,34 @@ func TestManageCopyMoveDelete(t *testing.T) {
 		t.Fatalf("delete failed: %v", err)
 	}
 }
+
+func TestAppendTailSearchAndDU(t *testing.T) {
+	root := t.TempDir()
+	s := Service{Roots: []string{root}, MaxInlineBytes: 1024}
+	path := filepath.Join(root, "logs", "agent.log")
+	if _, err := s.Append(path, []byte("one\ntwo\nthree\n"), 0644, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(path, []byte("four\n"), 0644, false); err != nil {
+		t.Fatal(err)
+	}
+	lines, err := s.Tail(path, 2, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 2 || lines[0] != "three" || lines[1] != "four" {
+		t.Fatalf("tail=%#v", lines)
+	}
+	results, err := s.Search(root, "agent", 10)
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err != nil || len(results) != 1 || results[0].Path != resolvedPath {
+		t.Fatalf("results=%#v err=%v", results, err)
+	}
+	bytes, err := s.DU(root)
+	if err != nil || bytes != int64(len("one\ntwo\nthree\nfour\n")) {
+		t.Fatalf("du=%d err=%v", bytes, err)
+	}
+}

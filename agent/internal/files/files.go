@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -25,6 +26,11 @@ type ReadResult struct {
 	Bytes               int64
 	Offset              int64
 	Truncated           bool
+}
+type SearchResult struct {
+	Path  string `json:"path"`
+	Size  int64  `json:"size"`
+	IsDir bool   `json:"is_dir"`
 }
 
 func (s Service) Resolve(path string, forCreate bool) (string, error) {
@@ -143,6 +149,116 @@ func (s Service) Write(path string, data []byte, mode os.FileMode, parents bool)
 	}
 	return resolved, nil
 }
+func (s Service) Append(path string, data []byte, mode os.FileMode, parents bool) (string, error) {
+	if mode == 0 {
+		mode = 0644
+	}
+	if parents {
+		if err := s.authorizeParent(path); err != nil {
+			return "", err
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return "", err
+		}
+	}
+	resolved, err := s.Resolve(path, true)
+	if err != nil {
+		return "", err
+	}
+	f, err := os.OpenFile(resolved, os.O_CREATE|os.O_APPEND|os.O_WRONLY, mode)
+	if err != nil {
+		return "", err
+	}
+	_, writeErr := f.Write(data)
+	closeErr := f.Close()
+	if writeErr != nil {
+		return "", writeErr
+	}
+	return resolved, closeErr
+}
+func (s Service) Tail(path string, limit int, maxBytes int64) ([]string, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	if maxBytes <= 0 || maxBytes > s.MaxInlineBytes {
+		maxBytes = s.MaxInlineBytes
+	}
+	info, err := s.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	offset := info.Size() - maxBytes
+	if offset < 0 {
+		offset = 0
+	}
+	result, err := s.Read(path, offset, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	b, err := base64.StdEncoding.DecodeString(result.ContentBase64)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) > limit {
+		lines = lines[len(lines)-limit:]
+	}
+	return lines, nil
+}
+func (s Service) Search(path, query string, limit int) ([]SearchResult, error) {
+	resolved, err := s.Resolve(path, false)
+	if err != nil {
+		return nil, err
+	}
+	if query == "" {
+		return nil, errors.New("query is required")
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	out := []SearchResult{}
+	err = filepath.WalkDir(resolved, func(current string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if len(out) >= limit {
+			return filepath.SkipDir
+		}
+		if strings.Contains(strings.ToLower(entry.Name()), strings.ToLower(query)) {
+			info, err := entry.Info()
+			if err == nil {
+				out = append(out, SearchResult{Path: current, Size: info.Size(), IsDir: entry.IsDir()})
+			}
+		}
+		return nil
+	})
+	return out, err
+}
+func (s Service) DU(path string) (int64, error) {
+	resolved, err := s.Resolve(path, false)
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	err = filepath.WalkDir(resolved, func(_ string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if entry.Type().IsRegular() {
+			if info, err := entry.Info(); err == nil {
+				total += info.Size()
+			}
+		}
+		return nil
+	})
+	return total, err
+}
 
 // authorizeParent verifies the closest existing parent before mkdir can create
 // any directories. This keeps create_parents inside the configured roots.
@@ -177,7 +293,7 @@ func (s Service) authorizeParent(path string) error {
 	}
 }
 func (s Service) Manage(action, path, target string, mode os.FileMode, recursive bool) error {
-	writeActions := map[string]bool{"mkdir": true, "touch": true, "copy": true, "move": true, "rename": true, "delete": true, "chmod": true, "truncate": true, "symlink": true, "hardlink": true}
+	writeActions := map[string]bool{"mkdir": true, "touch": true, "copy": true, "move": true, "rename": true, "delete": true, "chmod": true, "chown": true, "truncate": true, "symlink": true, "hardlink": true}
 	if !writeActions[action] {
 		return fmt.Errorf("unsupported file action: %s", action)
 	}
@@ -206,6 +322,21 @@ func (s Service) Manage(action, path, target string, mode os.FileMode, recursive
 	}
 	if action == "chmod" {
 		return os.Chmod(resolved, mode)
+	}
+	if action == "chown" {
+		parts := strings.Split(target, ":")
+		if len(parts) != 2 {
+			return errors.New("target must be uid:gid")
+		}
+		uid, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return err
+		}
+		gid, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return err
+		}
+		return os.Chown(resolved, uid, gid)
 	}
 	if action == "truncate" {
 		return os.Truncate(resolved, 0)

@@ -76,3 +76,15 @@ func TestFullTrustShell(t *testing.T) {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }
+
+func TestStructuredSystemResourcesAndJobs(t *testing.T) {
+	s, token := testServer(t)
+	w := request(t, s, token, http.MethodGet, "/v1/system/resources", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "memory_bytes") {
+		t.Fatalf("resources status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, s, token, http.MethodPost, "/v1/jobs", `{"kind":"test","command":{"argv":["/bin/echo","job"],"dry_run":true}}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "queued") {
+		t.Fatalf("job status=%d body=%s", w.Code, w.Body.String())
+	}
+}

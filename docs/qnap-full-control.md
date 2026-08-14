@@ -15,10 +15,11 @@
 
 常用工具按域：
 
-- System：`nas_system_info`、`nas_system_resources`、`nas_process_list`、`nas_system_thermal`、`nas_power`。
-- Files：`nas_file_list`、`nas_file_read`、`nas_file_write`、`nas_file_write_binary`、`nas_file_manage`、`nas_file_checksum`。
+- System：`nas_system_info`、`nas_system_resources`、`nas_process_list`、`nas_process_action`、`nas_service_list`、`nas_service_action`、`nas_system_thermal`、`nas_power`。
+- Files：`nas_file_list`、`nas_file_read`、`nas_file_write`、`nas_file_write_binary`、`nas_file_append`、`nas_file_search`、`nas_file_tail`、`nas_file_du`、`nas_file_manage`、`nas_file_checksum`。
 - Docker：`nas_docker_containers`、`nas_docker_command` 与各兼容细分工具。
 - QPKG：`nas_qpkg_list`、`nas_qpkg_manage`。
 - Discovery：`nas_discovery` 显示 QTS/QuTS hero、工具链和 adapter capability 状态。
+- Accounts and shares：`nas_users`、`nas_user_manage`、`nas_groups`、`nas_group_manage`、`nas_share_list`、`nas_acl_get`、`nas_acl_set`。只有经 runtime probe 验证存在的系统工具会执行写操作。
 
 `observe`、`operate`、`admin` profile 仍可用于受限部署。它们保留 `allowed_roots`、命令列表、secret redaction 与 confirmation 模式。设置变更后重启 QPKG。

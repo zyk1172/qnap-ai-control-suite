@@ -6,9 +6,10 @@ import { registerFileTools } from "./tools/files.js";
 import { registerDockerTools } from "./tools/docker.js";
 import { registerQNAPTools } from "./tools/qnap.js";
 import { registerJobTools } from "./tools/jobs.js";
+import { version } from "./version.js";
 
 export function createServer() {
-  const server = new McpServer({ name: "qnap-ai-control-mcp", version: "1.0.0" }, { capabilities: { logging: {} } });
+  const server = new McpServer({ name: "qnap-ai-control-mcp", version }, { capabilities: { logging: {} } });
   registerSystemTools(server); registerFileTools(server); registerDockerTools(server); registerQNAPTools(server); registerJobTools(server);
   return server;
 }
