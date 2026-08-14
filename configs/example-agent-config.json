@@ -1,29 +1,23 @@
 {
+  "version": 1,
   "listen": "0.0.0.0:8756",
-  "token_sha256": "REPLACE_WITH_SHA256_OF_YOUR_TOKEN",
-  "allowed_roots": [
-    "/share"
-  ],
-  "allowed_commands": [
-    "/bin/df",
-    "/bin/ps",
-    "/bin/uname",
-    "/sbin/getcfg",
-    "/sbin/ifconfig",
-    "/sbin/qpkg_cli",
-    "/usr/bin/uptime"
-  ],
+  "auth": { "type": "bearer", "token_sha256": "REPLACE_WITH_SHA256_OF_YOUR_TOKEN" },
+  "profile": "full_trust",
+  "permissions": {
+    "allowed_roots": ["/"],
+    "allow_any_command": true,
+    "allowed_commands": [],
+    "allow_shell": true
+  },
+  "privacy": { "redact_secrets": false },
+  "confirmation": { "mode": "off", "ttl_seconds": 600 },
+  "command": { "timeout_seconds": 30, "max_output_bytes": 8388608 },
+  "files": { "max_inline_bytes": 4194304 },
+  "jobs": { "max_history": 200 },
+  "audit": { "enabled": true, "path": "/var/log/qnap-ai-control-agent/audit.jsonl", "redact_secrets": false },
   "docker_paths": [
     "/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker",
-    "/share/CACHEDEV1_DATA/.qpkg/container-station/usr/bin/docker",
     "/share/CACHEDEV5_DATA/.qpkg/container-station/bin/docker",
-    "/share/CACHEDEV5_DATA/.qpkg/container-station/usr/bin/docker",
-    "/usr/bin/docker",
-    "/usr/local/bin/docker",
-    "/bin/docker"
-  ],
-  "allow_shell": false,
-  "audit_log": "/var/log/qnap-ai-control-agent/audit.jsonl",
-  "max_read_bytes": 2097152,
-  "command_timeout_seconds": 30
+    "/usr/bin/docker"
+  ]
 }

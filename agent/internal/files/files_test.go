@@ -1,0 +1,64 @@
+package files
+
+import (
+	"encoding/base64"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestBinaryRangeRead(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "binary")
+	data := []byte{0, 255, 1, 2, 3, 4}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := (Service{Roots: []string{root}, MaxInlineBytes: 4}).Read(path, 3, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := base64.StdEncoding.DecodeString(r.ContentBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(data[3:]) || r.Truncated {
+		t.Fatalf("bad read %+v %v", r, got)
+	}
+}
+func TestSymlinkEscapeRejected(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("no"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := (Service{Roots: []string{root}, MaxInlineBytes: 100}).Read(filepath.Join(root, "escape"), 0, 100)
+	if err == nil {
+		t.Fatal("expected symlink escape rejection")
+	}
+}
+func TestManageCopyMoveDelete(t *testing.T) {
+	root := t.TempDir()
+	from := filepath.Join(root, "from")
+	if err := os.WriteFile(from, []byte("hello"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s := Service{Roots: []string{root}, MaxInlineBytes: 100}
+	copy := filepath.Join(root, "copy")
+	if err := s.Manage("copy", from, copy, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(root, "moved")
+	if err := s.Manage("move", copy, moved, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Manage("delete", moved, "", 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(moved); !os.IsNotExist(err) {
+		t.Fatalf("delete failed: %v", err)
+	}
+}

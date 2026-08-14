@@ -1,101 +1,19 @@
-# Architecture
+# 架构
 
-## Components
-
-```mermaid
-flowchart LR
-  Mac["Mac: Codex / OpenClaw / Hermes"] --> MCP["mac-bridge MCP stdio server"]
-  MCP --> HTTP["HTTPS or HTTP LAN API"]
-  HTTP --> Agent["QNAP AI Control Agent"]
-  Agent --> Files["/share files"]
-  Agent --> QPKG["qpkg_cli"]
-  Agent --> Docker["Container Station / Docker CLI"]
-  Agent --> Cmd["allowlisted commands"]
-  Agent --> Audit["audit.jsonl"]
+```text
+MCP client -> official Node MCP bridge -> authenticated HTTP -> Go agent
+                                                   |-> executor
+                                                   |-> files
+                                                   |-> jobs/audit
+                                                   |-> QNAP discovery/docker/qpkg adapters
 ```
 
-## Why this is broader than a simple QNAP MCP server
+Go agent 不依赖数据库。长操作由内存 Job manager 管理，日志和 command 输出都有上限。HTTP 使用读写超时和 SIGTERM/SIGINT graceful shutdown。
 
-A plain MCP server usually exposes a small fixed tool set. This suite separates the NAS control plane from the Mac AI control plane:
+所有 API 都使用同一 envelope：
 
-- The NAS agent owns real NAS capabilities, permissions, audit, and local process access.
-- The Mac bridge adapts those capabilities to MCP for Codex, OpenClaw, Hermes, or other clients.
-- New NAS adapters can be added without changing every Mac client.
-- High-risk operations can be handled as two-step plans instead of one-shot tool calls.
-
-## Permission model
-
-The first version has one restricted profile:
-
-- `allowed_roots`: file paths that may be listed, read, or written.
-- `allowed_commands`: exact executable paths that may be run.
-- `docker_paths`: exact Docker CLI candidates used for Container Station integration.
-- `allow_shell`: disabled by default. Keep it disabled unless the NAS is isolated and the command caller is trusted.
-
-Future profiles should be explicit:
-
-- `observe`: status, logs, read-only inventory.
-- `operate`: service restart, safe config edit with dry-run diff.
-- `admin`: storage/network/package/container actions that can break services.
-
-## API surface
-
-Current endpoints:
-
-- `GET /v1/health`
-- `GET /v1/capabilities`
-- `GET /v1/system/overview`
-- `GET /v1/system/processes`
-- `GET /v1/system/thermal`
-- `GET /v1/audit/tail`
-- `GET /v1/files/list?path=/share/...`
-- `GET /v1/files/stat?path=/share/...`
-- `POST /v1/files/read`
-- `POST /v1/files/write`
-- `POST /v1/command/run`
-- `GET /v1/qnap/qpkg`
-- `POST /v1/qnap/qpkg/action`
-- `POST /v1/qnap/qpkg/manage`
-- `POST /v1/qnap/getcfg`
-- `GET /v1/docker/info`
-- `GET /v1/docker/containers`
-- `GET /v1/docker/images`
-- `POST /v1/docker/inspect`
-- `POST /v1/docker/logs`
-- `POST /v1/docker/action`
-- `POST /v1/docker/command`
-- `POST /v1/operations/prepare`
-- `POST /v1/operations/confirm`
-- `GET /v1/operations/pending`
-
-All endpoints require:
-
-```http
-Authorization: Bearer <token>
+```json
+{"ok":true,"data":{},"meta":{"request_id":"...","duration_ms":1}}
 ```
 
-## Threat model
-
-Primary risks:
-
-- A leaked token gives LAN access to allowed NAS operations.
-- Over-broad `allowed_commands` can become equivalent to root.
-- Exposing the service to the Internet creates a direct NAS control surface.
-- Adding shell execution gives the model too much ambient authority.
-
-Controls already present:
-
-- SHA-256 token hash stored in config instead of plaintext token.
-- No shell execution by default.
-- Exact command allowlist.
-- Path root checks for file access.
-- JSONL audit log.
-- In-memory prepare / confirm flow for sensitive MCP operations.
-
-Controls to add before serious admin use:
-
-- mTLS client certificates.
-- Per-tool roles.
-- User confirmation tokens for destructive operations.
-- Rate limiting and IP allowlist.
-- Signed command plans.
+失败响应为 `{ "ok": false, "error": { "code", "message", "details" }, "meta" }`。command 失败会区分 `non_zero_exit`、`timeout`、`not_found`、`start_failed`。

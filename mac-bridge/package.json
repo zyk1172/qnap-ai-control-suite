@@ -1,15 +1,20 @@
 {
   "name": "qnap-ai-control-mcp",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "type": "module",
   "private": true,
   "bin": {
     "qnap-ai-control-mcp": "./src/mcp-server.js"
   },
   "scripts": {
-    "start": "node src/mcp-server.js"
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "^4.4.3"
   }
 }

@@ -1,88 +1,39 @@
-# 安装和部署
+# 安装和升级
 
-## 1. 构建 agent
+## 构建
 
-QNAP x86_64/amd64 机型：
+QNAP TS-264C 使用 amd64：
 
 ```bash
-cd /path/to/qnap-ai-control-suite
 ./scripts/build_agent.sh
-```
-
-ARM64 机型：
-
-```bash
-GOARCH=arm64 ./scripts/build_agent.sh
-```
-
-输出：
-
-```text
-dist/linux-amd64/qnap-ai-control-agent
-```
-
-## 2. 生成 QPKG
-
-正式 `.qpkg` 需要 QNAP QDK 的 `qbuild`。
-
-```bash
 ./scripts/package_qpkg.sh amd64
 ```
 
-如果没有 `qbuild`，脚本只会生成：
+脚本从仓库 `VERSION` 读取版本，并注入 agent、QPKG 元数据和 artifact 名。正式包输出为：
 
 ```text
-dist/QnapAIControl-0.3.2-linux-amd64.qpkg-staging.tar.gz
+dist/QnapAIControl_1.0.0.qpkg
+dist/QnapAIControl_1.0.0.qpkg.md5
 ```
 
-这只是检查包结构用的 staging 包，不能当正式 QPKG 安装。
+需要 QNAP QDK `qbuild`。没有 QDK 时只会生成 staging archive，不能上传 App Center。
 
-## 3. 安装到 QNAP
+## App Center
 
-生成正式 `.qpkg` 后：
+1. 上传正式 `.qpkg` 并安装。
+2. 启动 `QNAP AI Control`。
+3. 打开 `http://NAS_IP:8756/`。
+4. 从 `/etc/config/qnap-ai-control-agent/initial-token.txt` 读取 token，填入 WebUI。
 
-1. 打开 QNAP App Center。
-2. 选择手动安装。
-3. 上传 `QnapAIControl_0.3.2.qpkg`。
-4. 启动 `QNAP AI Control` 套件。
+首次安装生成 `full_trust` v1 配置。原有 0.3.x 配置可被 agent 自动读取并迁移为内存 v1 设置；升级不会因旧字段而启动失败。
 
-首次启动会生成：
+## 真机验证
 
-```text
-/etc/config/qnap-ai-control-agent/config.json
-/etc/config/qnap-ai-control-agent/initial-token.txt
-/var/log/qnap-ai-control-agent/audit.jsonl
+在 NAS 上运行：
+
+```sh
+./scripts/qnap_probe.sh /share/Public/qnap-probe.json
+QACS_BASE_URL=http://127.0.0.1:8756 QACS_TOKEN='...' ./scripts/qnap_integration_test.sh
 ```
 
-## 4. WebUI 设置 token
-
-打开：
-
-```text
-http://NAS_IP:8756/
-```
-
-把 token 粘贴到 WebUI 左侧输入框，点击 `保存到浏览器`，再点击 `测试连接`。
-
-WebUI 只把 token 保存到当前浏览器 `localStorage`，不会写回 NAS 配置。
-
-## 5. Mac 端连接
-
-从 NAS 读取 token：
-
-```bash
-cat /etc/config/qnap-ai-control-agent/initial-token.txt
-```
-
-在 Mac 设置：
-
-```bash
-export QACS_BASE_URL=http://NAS_IP:8756
-export QACS_TOKEN='上一步读取的 token'
-```
-
-健康检查：
-
-```bash
-curl -H "Authorization: Bearer $QACS_TOKEN" "$QACS_BASE_URL/v1/health"
-```
+probe 用于确认 QTS/QuTS hero、Container Station、SMART、RAID、ZFS 和 QNAP 命令可用性。

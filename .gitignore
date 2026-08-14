@@ -3,4 +3,5 @@ dist/
 tools/
 configs/dev-agent-config.json
 *.log
+mac-bridge/node_modules/
 .DS_Store

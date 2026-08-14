@@ -7,6 +7,7 @@ QPKG_ARCH="${QPKG_ARCH:-generic}"
 BUILD_DIR="$ROOT/build/qpkg"
 QDK_DIR="${QDK_DIR:-$ROOT/tools/QDK/shared}"
 QBUILD_BIN="${QBUILD_BIN:-}"
+VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
 
 if [ "$(uname -s)" = "Darwin" ] && [ -x "$QDK_DIR/bin/qbuild" ]; then
   mkdir -p "$ROOT/tools/qdk-macos/bin"
@@ -65,6 +66,7 @@ mkdir -p "$BUILD_DIR/shared/bin" "$ROOT/dist"
 GOOS=linux GOARCH="$ARCH" "$ROOT/scripts/build_agent.sh"
 cp "$ROOT/dist/linux-$ARCH/qnap-ai-control-agent" "$BUILD_DIR/shared/bin/"
 cp "$ROOT/qpkg/qpkg.cfg" "$BUILD_DIR/"
+perl -0pi -e "s/__VERSION__/$VERSION/g" "$BUILD_DIR/qpkg.cfg"
 cp "$ROOT/qpkg/shared/qnap-ai-control-agent.sh" "$BUILD_DIR/shared/"
 if [ -d "$ROOT/qpkg/icons" ]; then
   mkdir -p "$BUILD_DIR/icons"
@@ -97,8 +99,8 @@ if [ -n "$QBUILD_BIN" ]; then
   fi
   find "$ROOT/dist" -maxdepth 1 -name "*.qpkg" -print
 else
-  tar -C "$BUILD_DIR" -czf "$ROOT/dist/QnapAIControl-0.2.0-linux-$ARCH.qpkg-staging.tar.gz" .
+  tar -C "$BUILD_DIR" -czf "$ROOT/dist/QnapAIControl-$VERSION-linux-$ARCH.qpkg-staging.tar.gz" .
   echo "qbuild not found; wrote staging archive:"
-  echo "$ROOT/dist/QnapAIControl-0.2.0-linux-$ARCH.qpkg-staging.tar.gz"
+  echo "$ROOT/dist/QnapAIControl-$VERSION-linux-$ARCH.qpkg-staging.tar.gz"
   echo "Install QNAP QDK and rerun this script to produce a real .qpkg."
 fi
