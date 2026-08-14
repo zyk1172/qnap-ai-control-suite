@@ -1186,21 +1186,25 @@ func (s *Server) logSources(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) logTail(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name  string `json:"name"`
-		Limit int    `json:"limit"`
+		Name   string `json:"name"`
+		Limit  int    `json:"limit"`
+		Cursor int    `json:"cursor"`
+		Query  string `json:"query"`
 	}
 	if r.Method == http.MethodGet {
 		req.Name = r.URL.Query().Get("name")
 		req.Limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
+		req.Cursor, _ = strconv.Atoi(r.URL.Query().Get("cursor"))
+		req.Query = r.URL.Query().Get("query")
 	} else if !decode(w, r, &req) {
 		return
 	}
-	lines, err := s.Logs.Tail(req.Name, req.Limit)
+	page, err := s.Logs.Page(req.Name, req.Limit, req.Cursor, req.Query)
 	if err != nil {
 		s.fail(w, r, 400, "log_tail_failed", err.Error(), nil)
 		return
 	}
-	s.ok(w, r, map[string]any{"name": req.Name, "lines": lines})
+	s.ok(w, r, map[string]any{"name": req.Name, "query": req.Query, "lines": page.Lines, "next_cursor": page.NextCursor, "total": page.Total})
 }
 func (s *Server) ecosystem(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r, map[string]any{"adapters": s.Ecosystem.Inventory(r.Context())})

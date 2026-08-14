@@ -29,7 +29,7 @@ export function registerQNAPTools(server) {
   register(server, "nas_acl_get", "Read POSIX ACL for a path when getfacl is available.", { path: z.string().min(1) }, (args) => request("POST", "/v1/acl", args), { readOnlyHint: true });
   register(server, "nas_acl_set", "Set a POSIX ACL entry when setfacl is available.", { path: z.string().min(1), entry: z.string().min(1) }, (args) => request("POST", "/v1/acl/set", args), { destructiveHint: true });
   register(server, "nas_log_sources", "List available audit, service, system, and kernel log sources.", {}, () => request("GET", "/v1/logs"), { readOnlyHint: true });
-  register(server, "nas_log_tail", "Read a bounded tail from a known NAS log source.", { name: z.enum(["audit", "service", "system", "kernel", "syslog"]), limit: z.number().int().positive().max(2000).optional() }, (args) => request("POST", "/v1/logs/tail", args), { readOnlyHint: true });
+  register(server, "nas_log_tail", "Read a bounded, paged tail from a known NAS log source, optionally filtering text.", { name: z.enum(["audit", "service", "system", "kernel", "syslog"]), limit: z.number().int().positive().max(2000).optional(), cursor: z.number().int().nonnegative().optional(), query: z.string().optional() }, (args) => request("POST", "/v1/logs/tail", args), { readOnlyHint: true });
   register(server, "nas_qnap_ecosystem", "Inspect Virtualization Station, HBS, iSCSI, certificate, and UPS adapter states. Unsupported private APIs report why rather than pretending to work.", {}, () => request("GET", "/v1/qnap/ecosystem"), { readOnlyHint: true });
   register(server, "nas_ups", "Read NUT UPS inventory and current values when the NAS exposes upsc.", {}, () => request("GET", "/v1/qnap/ups"), { readOnlyHint: true });
 }

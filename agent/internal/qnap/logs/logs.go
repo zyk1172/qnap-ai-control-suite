@@ -13,6 +13,11 @@ type Source struct {
 	Name, Path string
 	Available  bool
 }
+type Page struct {
+	Lines      []string `json:"lines"`
+	NextCursor int      `json:"next_cursor"`
+	Total      int      `json:"total"`
+}
 
 func (s Service) Sources() []Source {
 	items := []Source{{Name: "audit", Path: s.AuditPath}, {Name: "service", Path: s.ServicePath}, {Name: "system", Path: "/var/log/messages"}, {Name: "kernel", Path: "/var/log/kern.log"}, {Name: "syslog", Path: "/var/log/syslog"}}
@@ -23,6 +28,10 @@ func (s Service) Sources() []Source {
 	return items
 }
 func (s Service) Tail(name string, limit int) ([]string, error) {
+	page, err := s.Page(name, limit, 0, "")
+	return page.Lines, err
+}
+func (s Service) Page(name string, limit, cursor int, query string) (Page, error) {
 	if limit <= 0 {
 		limit = 200
 	}
@@ -37,9 +46,38 @@ func (s Service) Tail(name string, limit int) ([]string, error) {
 		}
 	}
 	if path == "" {
-		return nil, errors.New("unknown log source")
+		return Page{}, errors.New("unknown log source")
 	}
-	return tail(path, limit, 2*1024*1024)
+	lines, err := tail(path, 2000, 2*1024*1024)
+	if err != nil {
+		return Page{}, err
+	}
+	if query != "" {
+		filtered := []string{}
+		for _, line := range lines {
+			if strings.Contains(strings.ToLower(line), strings.ToLower(query)) {
+				filtered = append(filtered, line)
+			}
+		}
+		lines = filtered
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > len(lines) {
+		cursor = len(lines)
+	}
+	end := cursor + limit
+	if end > len(lines) {
+		end = len(lines)
+	}
+	return Page{Lines: lines[cursor:end], NextCursor: end, Total: len(lines)}, nil
 }
 func tail(path string, limit int, maxBytes int64) ([]string, error) {
 	f, err := os.Open(filepath.Clean(path))
