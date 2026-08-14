@@ -58,8 +58,8 @@ func (s Service) Discover(ctx context.Context) Result {
 		}
 		r.Features[key] = Feature{Supported: supported, Reason: reason}
 	}
-	r.Features["virtualization_station"] = qpkgFeature(r.QPKGs, []string{"virtualizationstation", "virtualization station"})
-	r.Features["hbs3"] = qpkgFeature(r.QPKGs, []string{"hybrid backup", "hbs"})
+	r.Features["virtualization_station"] = qpkgFeature(r.QPKGs, []string{"virtualizationstation", "virtualization station", "qkvm"})
+	r.Features["hbs3"] = qpkgFeature(r.QPKGs, []string{"hybrid backup", "hybridbackup", "hbs"})
 	r.Features["iscsi"] = Feature{Supported: false, Reason: "QNAP runtime probe required for stable iSCSI adapter"}
 	r.Features["certificates"] = Feature{Supported: false, Reason: "QNAP runtime probe required for certificate inventory adapter"}
 	r.Features["ups"] = Feature{Supported: find("upsc") != "", Reason: "NUT upsc utility not found"}

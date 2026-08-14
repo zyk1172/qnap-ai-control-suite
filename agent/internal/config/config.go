@@ -191,10 +191,10 @@ func Normalize(cfg Config) (Config, error) {
 	if cfg.Audit.RedactSecrets == nil {
 		cfg.Audit.RedactSecrets = boolPtr(cfg.Privacy.RedactSecrets)
 	}
-	cfg.DockerPaths = cleanPaths(cfg.DockerPaths)
-	if len(cfg.DockerPaths) == 0 {
-		cfg.DockerPaths = defaults.DockerPaths
-	}
+	// Keep explicit paths first, then add new built-in Container Station paths
+	// on upgrades. Existing configs would otherwise never discover a wrapper
+	// introduced in a later agent version.
+	cfg.DockerPaths = cleanPaths(append(cfg.DockerPaths, defaults.DockerPaths...))
 	return cfg, nil
 }
 

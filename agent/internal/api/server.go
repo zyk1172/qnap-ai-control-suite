@@ -84,7 +84,7 @@ type requestContext struct {
 func New(cfg config.Config) *Server {
 	executor := qexec.Executor{DefaultTimeout: cfg.Timeout(), MaxOutput: cfg.Command.MaxOutputBytes}
 	host, _ := os.Hostname()
-	return &Server{Config: cfg, Exec: executor, Files: files.Service{Roots: cfg.Permissions.AllowedRoots, MaxInlineBytes: cfg.Files.MaxInlineBytes}, Jobs: jobs.New(cfg.Jobs.MaxHistory), Audit: &audit.Logger{Enabled: cfg.Audit.Enabled, Path: cfg.Audit.Path}, Docker: docker.Service{Exec: executor, Paths: cfg.DockerPaths, RedactSecrets: cfg.Privacy.RedactSecrets}, QPKG: qpkg.Service{Exec: executor}, Discovery: discovery.Service{Exec: executor}, System: qsystem.Service{Exec: executor}, Network: qnetwork.Service{Exec: executor}, Storage: storage.Service{Exec: executor}, Users: users.Service{Exec: executor}, Shares: shares.Service{Exec: executor}, Logs: logs.Service{AuditPath: cfg.Audit.Path, ServicePath: "/var/log/qnap-ai-control-agent/service.log"}, Ecosystem: ecosystem.Service{Discovery: discovery.Service{Exec: executor}}, started: time.Now(), hostname: host}
+	return &Server{Config: cfg, Exec: executor, Files: files.Service{Roots: cfg.Permissions.AllowedRoots, MaxInlineBytes: cfg.Files.MaxInlineBytes}, Jobs: jobs.New(cfg.Jobs.MaxHistory), Audit: &audit.Logger{Enabled: cfg.Audit.Enabled, Path: cfg.Audit.Path}, Docker: docker.Service{Exec: executor, Paths: cfg.DockerPaths, RedactSecrets: cfg.Privacy.RedactSecrets}, QPKG: qpkg.Service{Exec: executor}, Discovery: discovery.Service{Exec: executor}, System: qsystem.Service{Exec: executor}, Network: qnetwork.Service{Exec: executor}, Storage: storage.Service{Exec: executor}, Users: users.Service{Exec: executor}, Shares: shares.Service{Exec: executor}, Logs: logs.Service{AuditPath: cfg.Audit.Path, ServicePath: "/var/log/qnap-ai-control-agent/service.log"}, Ecosystem: ecosystem.Service{Discovery: discovery.Service{Exec: executor}, Exec: executor}, started: time.Now(), hostname: host}
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -185,6 +185,8 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request) {
 		s.networkDNS(w, r)
 	case "/v1/network/virtual-switches":
 		s.virtualSwitches(w, r)
+	case "/v1/network/manage":
+		s.networkManage(w, r)
 	case "/v1/storage/overview":
 		s.storage(w, r)
 	case "/v1/audit/tail":
@@ -195,6 +197,8 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request) {
 		s.logTail(w, r)
 	case "/v1/qnap/ecosystem":
 		s.ecosystem(w, r)
+	case "/v1/qnap/ups":
+		s.ups(w, r)
 	case "/v1/files/list":
 		s.fileList(w, r)
 	case "/v1/files/stat":
@@ -441,6 +445,39 @@ func (s *Server) networkRoutes(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r, map[string]any{"routes": items})
 }
 func (s *Server) networkDNS(w http.ResponseWriter, r *http.Request) { s.ok(w, r, s.Network.DNS()) }
+func (s *Server) networkManage(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Action    string `json:"action"`
+		Interface string `json:"interface"`
+		Value     string `json:"value"`
+		Gateway   string `json:"gateway"`
+		Metric    int    `json:"metric"`
+		DryRun    bool   `json:"dry_run"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	args, err := qnetwork.CommandArgs(req.Action, req.Interface, req.Value, req.Gateway, req.Metric)
+	if err != nil {
+		s.fail(w, r, 400, "invalid_network_action", err.Error(), nil)
+		return
+	}
+	previous, _ := s.Network.Interfaces()
+	previousRoutes, _ := s.Network.Routes()
+	if req.DryRun {
+		s.ok(w, r, map[string]any{"argv": append([]string{"ip"}, args...), "previous": map[string]any{"interfaces": previous, "routes": previousRoutes}, "dry_run": true, "persistence": "transient_linux_ip"})
+		return
+	}
+	result, err := s.Network.RunIP(r.Context(), args)
+	if err != nil {
+		s.respondCommand(w, r, result, err)
+		return
+	}
+	current, _ := s.Network.Interfaces()
+	currentRoutes, _ := s.Network.Routes()
+	s.audit(r, "network.manage", "success", req, result.DurationMS, "")
+	s.ok(w, r, map[string]any{"command": result, "previous": map[string]any{"interfaces": previous, "routes": previousRoutes}, "new": map[string]any{"interfaces": current, "routes": currentRoutes}, "applied": true, "persistence": "transient_linux_ip"})
+}
 func (s *Server) virtualSwitches(w http.ResponseWriter, r *http.Request) {
 	items, err := s.Network.Interfaces()
 	if err != nil {
@@ -973,10 +1010,14 @@ func (s *Server) dockerCall(w http.ResponseWriter, r *http.Request, args []strin
 }
 func (s *Server) dockerCommand(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Subcommand string   `json:"subcommand"`
-		Args       []string `json:"args"`
-		TimeoutSec int      `json:"timeout_sec"`
-		DryRun     bool     `json:"dry_run"`
+		Subcommand  string            `json:"subcommand"`
+		Args        []string          `json:"args"`
+		TimeoutSec  int               `json:"timeout_sec"`
+		CWD         string            `json:"cwd"`
+		Env         map[string]string `json:"env"`
+		StdinBase64 string            `json:"stdin_base64"`
+		Async       bool              `json:"async"`
+		DryRun      bool              `json:"dry_run"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -989,11 +1030,32 @@ func (s *Server) dockerCommand(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, 409, "confirmation_required", "operation requires confirmation in this profile", map[string]any{"subcommand": req.Subcommand})
 		return
 	}
-	if req.DryRun {
-		s.ok(w, r, map[string]any{"argv": append([]string{"docker", req.Subcommand}, req.Args...), "dry_run": true})
+	stdin, err := decodeBase64(req.StdinBase64)
+	if err != nil {
+		s.fail(w, r, 400, "invalid_stdin_base64", err.Error(), nil)
 		return
 	}
-	result, err := s.Docker.Run(r.Context(), append([]string{req.Subcommand}, req.Args...), req.TimeoutSec)
+	if req.DryRun {
+		s.ok(w, r, map[string]any{"argv": append([]string{"docker", req.Subcommand}, req.Args...), "cwd": req.CWD, "env": req.Env, "stdin_bytes": len(stdin), "dry_run": true})
+		return
+	}
+	args := append([]string{req.Subcommand}, req.Args...)
+	if req.Async {
+		job := s.Jobs.Start("docker."+req.Subcommand, func(ctx context.Context, log func(string)) (any, error) {
+			result, err := s.Docker.RunWith(ctx, args, req.TimeoutSec, req.CWD, req.Env, stdin)
+			if result.Stdout != "" {
+				log(result.Stdout)
+			}
+			if result.Stderr != "" {
+				log(result.Stderr)
+			}
+			return result, err
+		})
+		s.audit(r, "docker.command.async", "queued", req, 0, "")
+		s.ok(w, r, job)
+		return
+	}
+	result, err := s.Docker.RunWith(r.Context(), args, req.TimeoutSec, req.CWD, req.Env, stdin)
 	s.respondCommand(w, r, result, err)
 }
 func (s *Server) qpkgList(w http.ResponseWriter, r *http.Request) {
@@ -1010,6 +1072,7 @@ func (s *Server) qpkgManage(w http.ResponseWriter, r *http.Request) {
 		Action string `json:"action"`
 		Path   string `json:"path"`
 		URL    string `json:"url"`
+		Async  bool   `json:"async"`
 		DryRun bool   `json:"dry_run"`
 	}
 	if !decode(w, r, &req) {
@@ -1036,6 +1099,28 @@ func (s *Server) qpkgManage(w http.ResponseWriter, r *http.Request) {
 		}
 		args, _ := qpkg.CommandArgs(req.Name, req.Action, req.Path, req.URL)
 		s.ok(w, r, map[string]any{"argv": append([]string{"qpkg_cli"}, args...), "dry_run": true})
+		return
+	}
+	if req.Async {
+		job := s.Jobs.Start("qpkg."+req.Action, func(ctx context.Context, log func(string)) (any, error) {
+			result, err := s.QPKG.Manage(ctx, req.Name, req.Action, req.Path, req.URL)
+			if result.Stdout != "" {
+				log(result.Stdout)
+			}
+			if result.Stderr != "" {
+				log(result.Stderr)
+			}
+			if err != nil {
+				return result, err
+			}
+			inventory, inventoryErr := s.QPKG.Inventory(ctx)
+			if inventoryErr != nil {
+				return map[string]any{"command": result}, inventoryErr
+			}
+			return map[string]any{"command": result, "packages_after": inventory}, nil
+		})
+		s.audit(r, "qpkg.manage.async", "queued", req, 0, "")
+		s.ok(w, r, job)
 		return
 	}
 	result, err := s.QPKG.Manage(r.Context(), req.Name, req.Action, req.Path, req.URL)
@@ -1083,6 +1168,14 @@ func (s *Server) logTail(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) ecosystem(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r, map[string]any{"adapters": s.Ecosystem.Inventory(r.Context())})
+}
+func (s *Server) ups(w http.ResponseWriter, r *http.Request) {
+	item, err := s.Ecosystem.UPS(r.Context())
+	if err != nil {
+		s.fail(w, r, 503, "ups_unavailable", err.Error(), nil)
+		return
+	}
+	s.ok(w, r, item)
 }
 func (s *Server) respondCommand(w http.ResponseWriter, r *http.Request, result qexec.Result, err error) {
 	if err == nil {
@@ -1161,6 +1254,16 @@ func decode(w http.ResponseWriter, r *http.Request, target any) bool {
 	}
 	return true
 }
+func decodeBase64(value string) ([]byte, error) {
+	if value == "" {
+		return nil, nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("stdin_base64 must be valid base64: %w", err)
+	}
+	return decoded, nil
+}
 func randomID() string {
 	b := make([]byte, 12)
 	if _, err := rand.Read(b); err != nil {
@@ -1170,4 +1273,32 @@ func randomID() string {
 }
 func glob(pattern string) []string { matches, _ := filepath.Glob(pattern); return matches }
 
-const indexPage = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QNAP AI Control Suite</title><style>body{margin:0;background:#101820;color:#edf3f7;font:15px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}main{max-width:1100px;margin:auto;padding:28px}h1{margin:0 0 8px}section{border-top:1px solid #38505c;padding:20px 0}input,button{background:#17252e;border:1px solid #55707c;color:#edf3f7;padding:9px;border-radius:5px}button{cursor:pointer}pre{background:#0a1117;padding:12px;overflow:auto}#grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.stat{background:#17252e;padding:12px;border-radius:6px}</style><main><h1>QNAP AI Control Suite</h1><p>v1 全系统本地控制平面</p><section><input id=t type=password placeholder="Bearer token"><button onclick="loadAll()">连接与刷新</button><span id=s></span></section><section id=grid></section><section><h2>能力与教程</h2><p>在可信 LAN 的 <code>full_trust</code> 配置中，API 可访问根文件系统、执行任意命令与 shell，并保留审计记录。不要暴露端口到公网。</p><pre id=o>输入 token 后显示状态、发现结果与工具配置。</pre></section></main><script>const o=document.querySelector('#o'),g=document.querySelector('#grid'),s=document.querySelector('#s');async function api(p){let r=await fetch(p,{headers:{Authorization:'Bearer '+t.value}}),j=await r.json();if(!r.ok)throw Error(j.error?.message||r.status);return j.data}async function loadAll(){try{let[h,c,d]=await Promise.all([api('/v1/health'),api('/v1/capabilities'),api('/v1/qnap/discovery')]);s.textContent='已连接 '+h.host;g.innerHTML=[['Profile',h.profile],['Platform',d.platform],['Docker',String(d.features.docker.supported)],['SMART',String(d.features.smart.supported)]].map(x=>'<div class=stat><b>'+x[0]+'</b><br>'+x[1]+'</div>').join('');o.textContent=JSON.stringify({health:h,capabilities:c,discovery:d,mcp:{command:'node',args:['/path/to/qnap-ai-control-suite/mac-bridge/src/server.js'],env:{QACS_BASE_URL:location.origin,QACS_TOKEN:'REPLACE_WITH_TOKEN'}}},null,2)}catch(e){s.textContent='连接失败: '+e.message}}</script></main></html>`
+const indexPage = `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QNAP AI Control Suite</title>
+<style>
+:root{color-scheme:dark;--bg:#101820;--surface:#17252e;--surface-2:#1e313b;--line:#38505c;--text:#edf3f7;--muted:#a9bbc5;--green:#65c7a2;--amber:#f2c879;--red:#ee8f8f}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1240px;margin:auto;padding:28px 22px 48px}header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;border-bottom:1px solid var(--line);padding-bottom:20px}h1{font-size:25px;margin:0}h2{font-size:17px;margin:0 0 12px}p{color:var(--muted);line-height:1.55}.eyebrow{font-size:12px;color:var(--green);margin:0 0 6px}.connection{display:flex;align-items:center;gap:8px;flex-wrap:wrap}input,button{font:inherit;border-radius:5px;padding:9px 10px;border:1px solid #55707c}input{width:240px;background:#0d161c;color:var(--text)}button{background:#2e6f67;color:white;border-color:#438d82;cursor:pointer}button:hover{background:#378278}.status{color:var(--muted);font-size:13px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:20px 0}.card{border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:14px;min-height:88px}.label{font-size:12px;color:var(--muted);margin-bottom:9px}.value{font-size:18px;font-weight:650;word-break:break-word}.sub{font-size:12px;color:var(--muted);margin-top:6px}.bands{display:grid;grid-template-columns:1.05fr .95fr;gap:18px}.panel{border-top:1px solid var(--line);padding:20px 0}.list{display:grid;gap:8px}.row{background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:10px;display:flex;justify-content:space-between;gap:12px}.row span:last-child{color:var(--muted);text-align:right;overflow-wrap:anywhere}pre{margin:0;max-height:320px;overflow:auto;background:#0a1117;border:1px solid #263b46;border-radius:5px;padding:12px;font-size:12px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}.ok{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--red)}.empty{color:var(--muted);padding:10px 0}@media(max-width:760px){main{padding:20px 14px}header{display:block}.connection{margin-top:14px}.bands{grid-template-columns:1fr}input{width:min(100%,320px)}}
+</style></head><body><main>
+<header><div><p class="eyebrow">LOCAL QNAP CONTROL PLANE</p><h1>QNAP AI Control Suite</h1><p>系统、容器、存储和 Agent 控制状态。</p></div><div class="connection"><input id="token" type="password" autocomplete="off" placeholder="Bearer token"><button id="refresh" type="button">连接并刷新</button><span id="status" class="status">等待连接</span></div></header>
+<section class="grid" id="summary"><div class="card"><div class="label">Agent</div><div class="value">未连接</div></div></section>
+<div class="bands"><section class="panel"><h2>系统与硬件</h2><div id="system" class="list"><div class="empty">连接后显示 CPU、内存、负载和温度。</div></div></section><section class="panel"><h2>存储与服务</h2><div id="inventory" class="list"><div class="empty">连接后显示磁盘、容器、QPKG 和 Job。</div></div></section></div>
+<div class="bands"><section class="panel"><h2>运行能力</h2><div id="capabilities" class="list"><div class="empty">连接后显示 QTS/QuTS hero 与可用适配器。</div></div></section><section class="panel"><h2>最近审计</h2><pre id="audit">连接后显示最近 200 条以内的审计记录。</pre></section></div>
+<div class="bands"><section class="panel"><h2>MCP 接入</h2><p>在 Codex、OpenClaw、Hermes 或其他 stdio MCP 客户端中配置以下 bridge。将 token 保留在客户端环境变量中，不要写入仓库。</p><pre id="mcp">连接后生成当前地址的配置。</pre></section><section class="panel"><h2>操作流程</h2><div class="list"><div class="row"><span>1. 连接</span><span>输入 WebUI token 并刷新状态。</span></div><div class="row"><span>2. 诊断</span><span>Agent 先调用 nas_health、nas_discovery、nas_system_resources。</span></div><div class="row"><span>3. 管理</span><span>容器使用 nas_docker_command；QPKG 使用 nas_qpkg_manage；复杂 QTS 操作可使用 nas_exec 或 nas_shell。</span></div><div class="row"><span>4. 追踪</span><span>长操作读取 nas_job_get、nas_job_logs；所有调用保留审计记录。</span></div></div></section></div>
+</main><script>
+const $=id=>document.getElementById(id), token=$("token"), status=$("status");
+function esc(value){return String(value??"").replace(/[&<>\"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));}
+function bytes(n){if(!Number.isFinite(n))return "-";for(const u of ["B","KiB","MiB","GiB","TiB"]){if(Math.abs(n)<1024)return n.toFixed(u==="B"?0:1)+" "+u;n/=1024;}return n.toFixed(1)+" PiB";}
+function card(label,value,detail,klass=""){return '<div class="card"><div class="label">'+esc(label)+'</div><div class="value '+klass+'">'+esc(value)+'</div><div class="sub">'+esc(detail||"")+'</div></div>';}
+function row(label,value){return '<div class="row"><span>'+esc(label)+'</span><span>'+esc(value)+'</span></div>';}
+async function api(path){const r=await fetch(path,{headers:{Authorization:"Bearer "+token.value}});const j=await r.json().catch(()=>({}));if(!r.ok||!j.ok)throw Error(j.error?.message||("HTTP "+r.status));return j.data;}
+function commandCount(command){return command&&command.stdout?command.stdout.trim().split("\\n").filter(Boolean).length:0;}
+function render(data){const [health,capabilities,discovery,resources,thermal,storage,containers,qpkg,jobs,audit]=data;const memory=resources.memory_bytes||{};const sensors=thermal.sensors||[];const temps=sensors.filter(x=>x.type==="temperature");const fans=sensors.filter(x=>x.type==="fan");const disks=storage.disks||[];const packages=qpkg.packages||[];const jobItems=jobs.jobs||[];const running=jobItems.filter(x=>x.status==="running").length;
+  $("summary").innerHTML=card("Agent",health.version,"运行 "+health.uptime_s+" 秒", "ok")+card("Profile",health.profile,"确认模式："+(capabilities.confirmation?.mode||"-"))+card("平台",discovery.platform,discovery.model||health.host)+card("CPU 负载",(resources.load_average||[]).join(" / ")||"-","1 / 5 / 15 分钟")+card("内存",bytes(memory.MemAvailable??memory.MemFree),"可用 / 总计 "+bytes(memory.MemTotal))+card("温度",temps.length?Math.max(...temps.map(x=>Number(x.value)||0)).toFixed(0)+" C":"-",temps.length+" 温度传感器，"+fans.length+" 风扇");
+  $("system").innerHTML=row("主机名",health.host)+row("内核",resources.kernel||discovery.utilities?.uname||"运行时发现")+row("系统时间",resources.time||"-")+row("挂载点",String((storage.volumes||[]).length))+row("温度传感器",temps.map(x=>x.name+": "+x.value+" "+x.unit).join("，")||"未发现");
+  $("inventory").innerHTML=row("物理磁盘",String(disks.length))+row("RAID 组",String((storage.raid_groups||[]).length))+row("容器",String(commandCount(containers)))+row("QPKG",String(packages.length))+row("运行中 Job",String(running))+row("QTS inventory",storage.qts?.supported?"qcli_storage 已连接":(storage.qts?.reason||"未发现"));
+  const features=Object.entries(discovery.features||{}).map(([name,feature])=>row(name,feature.supported?"可用":(feature.reason||"不可用"))).join("");$("capabilities").innerHTML=features||'<div class="empty">未返回能力信息。</div>';
+  $("audit").textContent=JSON.stringify({recent:audit?.lines||[],jobs:jobItems.slice(0,10)},null,2);
+  $("mcp").textContent=JSON.stringify({mcpServers:{"qnap-ai-control":{command:"node",args:["/path/to/qnap-ai-control-suite/mac-bridge/src/server.js"],env:{QACS_BASE_URL:location.origin,QACS_TOKEN:"REPLACE_WITH_TOKEN"}}}},null,2);
+}
+async function loadAll(){if(!token.value.trim()){status.textContent="需要 Bearer token";status.className="status warn";return;}status.textContent="正在读取 NAS 状态…";status.className="status";try{const result=await Promise.all([api("/v1/health"),api("/v1/capabilities"),api("/v1/qnap/discovery"),api("/v1/system/resources"),api("/v1/system/thermal"),api("/v1/storage/overview"),api("/v1/docker/containers").catch(e=>({error:e.message})),api("/v1/qnap/qpkg").catch(e=>({error:e.message})),api("/v1/jobs"),api("/v1/audit/tail").catch(e=>({error:e.message}))]);render(result);status.textContent="已连接";status.className="status ok";}catch(e){status.textContent="连接失败："+e.message;status.className="status bad";}}
+$("refresh").addEventListener("click",loadAll);token.addEventListener("keydown",e=>{if(e.key==="Enter")loadAll();});
+</script></body></html>`

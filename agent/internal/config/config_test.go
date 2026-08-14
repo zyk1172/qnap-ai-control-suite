@@ -35,3 +35,22 @@ func TestRejectsInvalidProfile(t *testing.T) {
 		t.Fatal("expected invalid profile error")
 	}
 }
+
+func TestNormalizeKeepsCustomDockerPathAndAddsNewDefaults(t *testing.T) {
+	cfg, err := Normalize(Config{Auth: Auth{TokenSHA256: "abc"}, Permissions: Permissions{AllowedRoots: []string{"/share"}}, DockerPaths: []string{"/custom/docker"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.DockerPaths) < 2 || cfg.DockerPaths[0] != "/custom/docker" {
+		t.Fatalf("custom path was not preserved: %#v", cfg.DockerPaths)
+	}
+	found := false
+	for _, path := range cfg.DockerPaths {
+		if path == "/share/CACHEDEV5_DATA/.qpkg/container-station/bin/system-docker" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("new Container Station default missing: %#v", cfg.DockerPaths)
+	}
+}

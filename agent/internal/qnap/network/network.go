@@ -96,6 +96,72 @@ func (s Service) RunIP(ctx context.Context, args []string) (qexec.Result, error)
 	}
 	return s.Exec.Run(ctx, qexec.Request{Argv: append([]string{path}, args...), Timeout: 30 * time.Second, MaxOutput: s.Exec.MaxOutput})
 }
+
+// CommandArgs translates the network API's declarative actions to ip argv.
+// These are transient Linux network changes; QTS persistent configuration and
+// Virtual Switch internals intentionally remain separate runtime adapters.
+func CommandArgs(action, iface, value, gateway string, metric int) ([]string, error) {
+	if !validInterface(iface) {
+		return nil, errors.New("invalid interface")
+	}
+	switch action {
+	case "set_mtu":
+		mtu, err := strconv.Atoi(value)
+		if err != nil || mtu < 576 || mtu > 9216 {
+			return nil, errors.New("mtu must be between 576 and 9216")
+		}
+		return []string{"link", "set", "dev", iface, "mtu", strconv.Itoa(mtu)}, nil
+	case "set_state":
+		if value != "up" && value != "down" {
+			return nil, errors.New("state must be up or down")
+		}
+		return []string{"link", "set", "dev", iface, value}, nil
+	case "address_add", "address_delete":
+		if _, _, err := net.ParseCIDR(value); err != nil {
+			return nil, errors.New("address must be a valid CIDR")
+		}
+		verb := "add"
+		if action == "address_delete" {
+			verb = "del"
+		}
+		return []string{"addr", verb, value, "dev", iface}, nil
+	case "route_add", "route_delete":
+		if value != "default" {
+			if _, _, err := net.ParseCIDR(value); err != nil {
+				return nil, errors.New("route destination must be default or a CIDR")
+			}
+		}
+		args := []string{"route", "add", value}
+		if action == "route_delete" {
+			args[1] = "del"
+		}
+		if gateway != "" {
+			if net.ParseIP(gateway) == nil {
+				return nil, errors.New("gateway must be an IP address")
+			}
+			args = append(args, "via", gateway)
+		}
+		args = append(args, "dev", iface)
+		if metric > 0 {
+			args = append(args, "metric", strconv.Itoa(metric))
+		}
+		return args, nil
+	default:
+		return nil, errors.New("unsupported network action")
+	}
+}
+
+func validInterface(name string) bool {
+	if name == "" || len(name) > 15 {
+		return false
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
+}
 func read(path string) string {
 	b, err := os.ReadFile(path)
 	if err != nil {

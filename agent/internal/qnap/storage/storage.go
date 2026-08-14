@@ -47,15 +47,106 @@ func (s Service) QTSInventory(ctx context.Context) (map[string]any, error) {
 	if path == "" {
 		return map[string]any{"supported": false, "reason": "qcli_storage was not discovered"}, nil
 	}
-	out := map[string]any{"supported": true, "backend": "qts-qcli"}
+	out := map[string]any{"supported": true, "backend": "qts-qcli", "commands": map[string]qexec.Result{}}
+	commands := out["commands"].(map[string]qexec.Result)
 	for key, args := range map[string][]string{"pools": {"-p"}, "volumes": {"-v"}, "disks": {"-d"}} {
 		result, err := s.Exec.Run(ctx, qexec.Request{Argv: append([]string{path}, args...), Timeout: 30 * time.Second, MaxOutput: s.Exec.MaxOutput})
 		if err != nil {
 			return out, err
 		}
-		out[key] = result
+		commands[key] = result
+		switch key {
+		case "pools":
+			out[key] = ParseQTSPools(result.Stdout)
+		case "volumes":
+			out[key] = ParseQTSVolumes(result.Stdout)
+		case "disks":
+			out[key] = ParseQTSDisks(result.Stdout)
+		}
 	}
 	return out, nil
+}
+
+// ParseQTSPools preserves rows from qcli_storage -p without assuming a
+// firmware-specific column layout. QTS changes this table between releases.
+func ParseQTSPools(stdout string) []map[string]any {
+	items := []map[string]any{}
+	for _, fields := range qcliRows(stdout) {
+		item := map[string]any{"fields": fields, "raw": strings.Join(fields, " ")}
+		for _, field := range fields {
+			if strings.HasPrefix(field, "/dev/") {
+				item["device"] = field
+				break
+			}
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+// ParseQTSVolumes extracts the stable leading volume id/name and mount path
+// emitted by qcli_storage -v while keeping every original table cell.
+func ParseQTSVolumes(stdout string) []map[string]any {
+	items := []map[string]any{}
+	for _, fields := range qcliRows(stdout) {
+		item := map[string]any{"fields": fields, "raw": strings.Join(fields, " ")}
+		if len(fields) > 0 {
+			if _, err := strconv.Atoi(fields[0]); err == nil {
+				item["id"] = fields[0]
+			}
+		}
+		if len(fields) > 1 {
+			item["name"] = fields[1]
+		}
+		for _, field := range fields {
+			if strings.HasPrefix(field, "/") {
+				item["mountpoint"] = field
+				break
+			}
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+// ParseQTSDisks emits QTS disk-table rows and locates a device path when one
+// is present. Model/slot columns remain in fields because their order varies.
+func ParseQTSDisks(stdout string) []map[string]any {
+	items := []map[string]any{}
+	for _, fields := range qcliRows(stdout) {
+		item := map[string]any{"fields": fields, "raw": strings.Join(fields, " ")}
+		for _, field := range fields {
+			if strings.HasPrefix(field, "/dev/") {
+				item["device"] = field
+				break
+			}
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func qcliRows(stdout string) [][]string {
+	rows := [][]string{}
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.Trim(line, "-_=+ ") == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 || looksLikeQCLIHeader(fields) {
+			continue
+		}
+		rows = append(rows, fields)
+	}
+	return rows
+}
+
+func looksLikeQCLIHeader(fields []string) bool {
+	line := strings.ToLower(strings.Join(fields, " "))
+	return strings.Contains(line, "volume") && strings.Contains(line, "name") ||
+		strings.Contains(line, "disk") && strings.Contains(line, "model") ||
+		strings.Contains(line, "pool") && strings.Contains(line, "name")
 }
 
 func (s Service) Disks() ([]Disk, error) {

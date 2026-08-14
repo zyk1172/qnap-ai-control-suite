@@ -6,6 +6,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	qexec "qnap-ai-control-suite/agent/internal/exec"
 )
 
 type Status string
@@ -19,14 +21,18 @@ const (
 )
 
 type Job struct {
-	ID, Kind              string
-	Status                Status
-	CreatedAt             time.Time
-	StartedAt, FinishedAt *time.Time
-	Result                any
-	Error                 string
-	Logs                  []string
-	cancel                context.CancelFunc
+	ID         string     `json:"id"`
+	Kind       string     `json:"kind"`
+	Status     Status     `json:"status"`
+	Progress   float64    `json:"progress"`
+	CreatedAt  time.Time  `json:"created_at"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	ExitCode   *int       `json:"exit_code,omitempty"`
+	Result     any        `json:"result,omitempty"`
+	Error      string     `json:"error,omitempty"`
+	Logs       []string   `json:"logs,omitempty"`
+	cancel     context.CancelFunc
 }
 type Manager struct {
 	mu         sync.RWMutex
@@ -76,6 +82,10 @@ func (m *Manager) Start(kind string, fn func(context.Context, func(string)) (any
 		} else {
 			job.Status = Succeeded
 			job.Result = result
+		}
+		if command, ok := result.(qexec.Result); ok {
+			exitCode := command.ExitCode
+			job.ExitCode = &exitCode
 		}
 	}()
 	return clone(*job)

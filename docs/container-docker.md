@@ -8,4 +8,6 @@
 
 `nas_docker_command` 传递 argv，不执行 shell 字符串。需要复杂恢复时，`nas_docker_inspect` 读取真实 inspect，修改参数后再以 `nas_docker_command` 重建。`full_trust` 不强制隐藏 inspect 中的 secret；请勿复制到公共渠道。
 
+所有 Docker 命令都可传 `cwd`、`env`、`stdin_base64`、`timeout_sec` 和 `async`。`cwd` 适用于 `docker compose`、`docker build .`；`stdin_base64` 保持二进制原样；`async: true` 返回 Job，随后用 `nas_job_get`、`nas_job_logs` 和 `nas_job_cancel` 跟踪 build、pull、compose 等长操作。
+
 Container Station 的 Docker endpoint 或 wrapper 状态由 NAS 决定。调用失败时先读取 `nas_discovery` 的 `utilities.docker`，再用 `nas_docker_command` 的 `version` 或 `info` 进行只读检查。不要把 Docker socket 或 agent 端口直接暴露到公网。

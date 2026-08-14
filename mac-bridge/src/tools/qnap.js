@@ -1,0 +1,34 @@
+import { request } from "../client.js";
+import { register, z } from "./register.js";
+
+export function registerQNAPTools(server) {
+  register(server, "nas_qpkg_list", "List QNAP QPKG packages from qpkg.conf.", {}, () => request("GET", "/v1/qnap/qpkg"), { readOnlyHint: true });
+  register(server, "nas_qpkg_manage", "Manage a QPKG and return verified inventory after a successful command. Use async for download, install, remove, or update operations that may take time.", { name: z.string().optional(), action: z.string().min(1), path: z.string().optional(), url: z.string().optional(), async: z.boolean().optional(), dry_run: z.boolean().optional() }, (args) => request("POST", "/v1/qnap/qpkg/manage", args), { destructiveHint: true });
+  register(server, "nas_qpkg_action", "Compatibility alias for QPKG management.", { name: z.string().min(1), action: z.enum(["start", "stop", "restart", "enable", "disable", "status"]), dry_run: z.boolean().optional() }, (args) => request("POST", "/v1/qnap/qpkg/action", args), { destructiveHint: true });
+  register(server, "nas_storage_overview", "Read discovered filesystem and RAID state.", {}, () => request("GET", "/v1/storage/overview"), { readOnlyHint: true });
+  register(server, "nas_disks", "List physical disks, NVMe devices, models, serials, and capacity from sysfs.", {}, () => request("GET", "/v1/storage/disks"), { readOnlyHint: true });
+  register(server, "nas_disk_smart", "Read SMART JSON for a disk when smartctl is present on the NAS.", { id: z.string().min(1) }, ({ id }) => request("GET", `/v1/storage/disks/${encodeURIComponent(id)}/smart`), { readOnlyHint: true });
+  register(server, "nas_disk_smart_test", "Start a short or long SMART test as an asynchronous job.", { id: z.string().min(1), kind: z.enum(["short", "long"]) }, ({ id, kind }) => request("POST", `/v1/storage/disks/${encodeURIComponent(id)}/smart-test`, { kind }), { destructiveHint: true });
+  register(server, "nas_raid", "List RAID groups from /proc/mdstat.", {}, () => request("GET", "/v1/storage/raid-groups"), { readOnlyHint: true });
+  register(server, "nas_storage_pool", "List ZFS pools when QuTS hero/ZFS tools are discovered.", {}, () => request("GET", "/v1/storage/pools"), { readOnlyHint: true });
+  register(server, "nas_volume", "List mounted volumes with backend classification.", {}, () => request("GET", "/v1/storage/volumes"), { readOnlyHint: true });
+  register(server, "nas_snapshots", "List ZFS snapshots when a stable snapshot backend is discovered.", {}, () => request("GET", "/v1/storage/snapshots"), { readOnlyHint: true });
+  register(server, "nas_snapshot_manage", "Create, delete, or clone a discovered ZFS snapshot as an asynchronous job.", { action: z.enum(["create", "delete", "clone"]), name: z.string().min(1), target: z.string().optional() }, (args) => request("POST", "/v1/storage/snapshots/action", args), { destructiveHint: true });
+  register(server, "nas_network_info", "Read interfaces, routes and DNS.", {}, () => request("GET", "/v1/network/info"), { readOnlyHint: true });
+  register(server, "nas_network_interfaces", "List interfaces, addresses, link state, MAC, speed and duplex.", {}, () => request("GET", "/v1/network/interfaces"), { readOnlyHint: true });
+  register(server, "nas_network_routes", "List kernel routes and default gateway.", {}, () => request("GET", "/v1/network/routes"), { readOnlyHint: true });
+  register(server, "nas_network_dns", "List DNS servers and search domains.", {}, () => request("GET", "/v1/network/dns"), { readOnlyHint: true });
+  register(server, "nas_network_manage", "Apply a transient Linux ip address, route, link-state, or MTU change and return before/after network snapshots. QTS persistent Virtual Switch configuration remains a separate subsystem.", { action: z.enum(["set_mtu", "set_state", "address_add", "address_delete", "route_add", "route_delete"]), interface: z.string().min(1), value: z.string().min(1), gateway: z.string().optional(), metric: z.number().int().nonnegative().optional(), dry_run: z.boolean().optional() }, (args) => request("POST", "/v1/network/manage", args), { destructiveHint: true });
+  register(server, "nas_virtual_switches", "Discover bridge, bond, and VLAN interfaces; QNAP private Virtual Switch actions require a runtime probe.", {}, () => request("GET", "/v1/network/virtual-switches"), { readOnlyHint: true });
+  register(server, "nas_users", "List local users from the NAS account database.", {}, () => request("GET", "/v1/users"), { readOnlyHint: true });
+  register(server, "nas_user_manage", "Create, update, delete, enable, disable, or change a local user using a detected account utility.", { action: z.enum(["create", "update", "delete", "password", "enable", "disable"]), name: z.string().min(1), args: z.array(z.string()).optional() }, (args) => request("POST", "/v1/users/manage", args), { destructiveHint: true });
+  register(server, "nas_groups", "List local groups from the NAS account database.", {}, () => request("GET", "/v1/groups"), { readOnlyHint: true });
+  register(server, "nas_group_manage", "Create, update, or delete a local group using a detected account utility.", { action: z.enum(["create", "update", "delete"]), name: z.string().min(1), args: z.array(z.string()).optional() }, (args) => request("POST", "/v1/groups/manage", args), { destructiveHint: true });
+  register(server, "nas_share_list", "List SMB shares from the configured SMB service file.", {}, () => request("GET", "/v1/shares"), { readOnlyHint: true });
+  register(server, "nas_acl_get", "Read POSIX ACL for a path when getfacl is available.", { path: z.string().min(1) }, (args) => request("POST", "/v1/acl", args), { readOnlyHint: true });
+  register(server, "nas_acl_set", "Set a POSIX ACL entry when setfacl is available.", { path: z.string().min(1), entry: z.string().min(1) }, (args) => request("POST", "/v1/acl/set", args), { destructiveHint: true });
+  register(server, "nas_log_sources", "List available audit, service, system, and kernel log sources.", {}, () => request("GET", "/v1/logs"), { readOnlyHint: true });
+  register(server, "nas_log_tail", "Read a bounded tail from a known NAS log source.", { name: z.enum(["audit", "service", "system", "kernel", "syslog"]), limit: z.number().int().positive().max(2000).optional() }, (args) => request("POST", "/v1/logs/tail", args), { readOnlyHint: true });
+  register(server, "nas_qnap_ecosystem", "Inspect Virtualization Station, HBS, iSCSI, certificate, and UPS adapter states. Unsupported private APIs report why rather than pretending to work.", {}, () => request("GET", "/v1/qnap/ecosystem"), { readOnlyHint: true });
+  register(server, "nas_ups", "Read NUT UPS inventory and current values when the NAS exposes upsc.", {}, () => request("GET", "/v1/qnap/ups"), { readOnlyHint: true });
+}

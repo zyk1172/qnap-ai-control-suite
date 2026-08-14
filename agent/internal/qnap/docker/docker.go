@@ -17,11 +17,14 @@ type Service struct {
 }
 
 func (s Service) Run(ctx context.Context, args []string, timeout int) (qexec.Result, error) {
+	return s.RunWith(ctx, args, timeout, "", nil, nil)
+}
+func (s Service) RunWith(ctx context.Context, args []string, timeout int, cwd string, env map[string]string, stdin []byte) (qexec.Result, error) {
 	bin, err := s.Binary()
 	if err != nil {
 		return qexec.Result{}, err
 	}
-	return s.Exec.Run(ctx, qexec.Request{Argv: append([]string{bin}, args...), Timeout: seconds(timeout), MaxOutput: s.Exec.MaxOutput})
+	return s.Exec.Run(ctx, qexec.Request{Argv: append([]string{bin}, args...), CWD: cwd, Env: env, Stdin: stdin, Timeout: seconds(timeout), MaxOutput: s.Exec.MaxOutput})
 }
 func (s Service) Binary() (string, error) {
 	for _, candidate := range s.Paths {

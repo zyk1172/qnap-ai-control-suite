@@ -100,3 +100,35 @@ func TestQPKGDryRunUsesDocumentedFlags(t *testing.T) {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }
+
+func TestQPKGAsyncQueuesAJobWithoutRunningQPKGOnRequest(t *testing.T) {
+	s, token := testServer(t)
+	w := request(t, s, token, http.MethodPost, "/v1/qnap/qpkg/manage", `{"name":"container-station","action":"start","async":true}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"kind":"qpkg.start"`) || !strings.Contains(w.Body.String(), `"progress":0`) {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestWebUIDashboardIsPublicAndListsOperationalPanels(t *testing.T) {
+	s, _ := testServer(t)
+	w := request(t, s, "", http.MethodGet, "/", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "系统与硬件") || !strings.Contains(w.Body.String(), "/v1/storage/overview") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestNetworkManageDryRunReturnsIPArgv(t *testing.T) {
+	s, token := testServer(t)
+	w := request(t, s, token, http.MethodPost, "/v1/network/manage", `{"action":"set_mtu","interface":"eth0","value":"9000","dry_run":true}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"mtu"`) || !strings.Contains(w.Body.String(), `"transient_linux_ip"`) {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestDockerDryRunPreservesExecutorInputs(t *testing.T) {
+	s, token := testServer(t)
+	w := request(t, s, token, http.MethodPost, "/v1/docker/command", `{"subcommand":"compose","args":["up","-d"],"cwd":"/share/Container/moviepilot","env":{"COMPOSE_PROJECT_NAME":"moviepilot"},"stdin_base64":"aW5wdXQ=","dry_run":true}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"cwd":"/share/Container/moviepilot"`) || !strings.Contains(w.Body.String(), `"stdin_bytes":5`) {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
