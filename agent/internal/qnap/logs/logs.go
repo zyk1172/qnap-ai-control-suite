@@ -10,8 +10,9 @@ import (
 
 type Service struct{ AuditPath, ServicePath string }
 type Source struct {
-	Name, Path string
-	Available  bool
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	Available bool   `json:"available"`
 }
 type Page struct {
 	Lines      []string `json:"lines"`

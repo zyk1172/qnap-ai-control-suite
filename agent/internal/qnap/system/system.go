@@ -30,8 +30,10 @@ type Info struct {
 	Mounts        []Mount           `json:"mounts"`
 }
 type Mount struct {
-	Device, Target, Filesystem string
-	ReadOnly                   bool
+	Device     string `json:"device"`
+	Target     string `json:"target"`
+	Filesystem string `json:"filesystem"`
+	ReadOnly   bool   `json:"read_only"`
 }
 type Process struct {
 	PID     int    `json:"pid"`
@@ -40,7 +42,11 @@ type Process struct {
 	Command string `json:"command,omitempty"`
 	PPID    int    `json:"ppid,omitempty"`
 }
-type Unit struct{ Name, State, Source string }
+type Unit struct {
+	Name   string `json:"name"`
+	State  string `json:"state"`
+	Source string `json:"source"`
+}
 
 func (s Service) Info(ctx context.Context) (Info, error) {
 	host, _ := os.Hostname()

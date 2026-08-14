@@ -15,17 +15,26 @@ import (
 
 type Service struct{ Exec qexec.Executor }
 type Interface struct {
-	Name, MAC, State, Speed, Duplex string
-	Index                           int
-	Flags                           []string
-	Addresses                       []string
-	Virtual                         bool
+	Name      string   `json:"name"`
+	MAC       string   `json:"mac"`
+	State     string   `json:"state"`
+	Speed     string   `json:"speed"`
+	Duplex    string   `json:"duplex"`
+	Index     int      `json:"index"`
+	Flags     []string `json:"flags"`
+	Addresses []string `json:"addresses"`
+	Virtual   bool     `json:"virtual"`
 }
 type Route struct {
-	Destination, Gateway, Interface string
-	Metric                          int
+	Destination string `json:"destination"`
+	Gateway     string `json:"gateway"`
+	Interface   string `json:"interface"`
+	Metric      int    `json:"metric"`
 }
-type DNS struct{ Servers, Search []string }
+type DNS struct {
+	Servers []string `json:"servers"`
+	Search  []string `json:"search"`
+}
 
 func (s Service) Interfaces() ([]Interface, error) {
 	list, err := net.Interfaces()

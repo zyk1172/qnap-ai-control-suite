@@ -17,29 +17,52 @@ import (
 
 type Service struct{ Exec qexec.Executor }
 type Disk struct {
-	ID, Path, Name, Model, Serial, Firmware, Transport string
-	SizeBytes                                          uint64
-	Rotational                                         bool
-	Temperature                                        *float64
-	SmartSupported                                     bool
-	Raw                                                map[string]any
+	ID             string         `json:"id"`
+	Path           string         `json:"path"`
+	Name           string         `json:"name"`
+	Model          string         `json:"model"`
+	Serial         string         `json:"serial"`
+	Firmware       string         `json:"firmware"`
+	Transport      string         `json:"transport"`
+	SizeBytes      uint64         `json:"size_bytes"`
+	Rotational     bool           `json:"rotational"`
+	Temperature    *float64       `json:"temperature,omitempty"`
+	SmartSupported bool           `json:"smart_supported"`
+	Raw            map[string]any `json:"raw"`
 }
 type RAID struct {
-	Name, Level, State, Raw string
-	Members                 []string
-	Degraded                bool
+	Name     string   `json:"name"`
+	Level    string   `json:"level"`
+	State    string   `json:"state"`
+	Raw      string   `json:"raw"`
+	Members  []string `json:"members"`
+	Degraded bool     `json:"degraded"`
 }
 type Pool struct {
-	Name, Backend, Health, Size, Alloc, Free string
-	Raw                                      map[string]any
+	Name    string         `json:"name"`
+	Backend string         `json:"backend"`
+	Health  string         `json:"health"`
+	Size    string         `json:"size"`
+	Alloc   string         `json:"alloc"`
+	Free    string         `json:"free"`
+	Raw     map[string]any `json:"raw"`
 }
 type Volume struct {
-	Name, Mountpoint, Filesystem, Source, Size, Used, Available string
-	Backend                                                     string
+	Name       string `json:"name"`
+	Mountpoint string `json:"mountpoint"`
+	Filesystem string `json:"filesystem"`
+	Source     string `json:"source"`
+	Size       string `json:"size"`
+	Used       string `json:"used"`
+	Available  string `json:"available"`
+	Backend    string `json:"backend"`
 }
 type Snapshot struct {
-	Name, Dataset, Backend, Created string
-	Raw                             map[string]any
+	Name    string         `json:"name"`
+	Dataset string         `json:"dataset"`
+	Backend string         `json:"backend"`
+	Created string         `json:"created"`
+	Raw     map[string]any `json:"raw"`
 }
 
 func (s Service) QTSInventory(ctx context.Context) (map[string]any, error) {
