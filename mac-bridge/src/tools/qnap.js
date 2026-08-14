@@ -12,8 +12,9 @@ export function registerQNAPTools(server) {
   register(server, "nas_raid", "List RAID groups from /proc/mdstat.", {}, () => request("GET", "/v1/storage/raid-groups"), { readOnlyHint: true });
   register(server, "nas_storage_pool", "List ZFS pools when QuTS hero/ZFS tools are discovered.", {}, () => request("GET", "/v1/storage/pools"), { readOnlyHint: true });
   register(server, "nas_volume", "List mounted volumes with backend classification.", {}, () => request("GET", "/v1/storage/volumes"), { readOnlyHint: true });
-  register(server, "nas_snapshots", "List ZFS snapshots when a stable snapshot backend is discovered.", {}, () => request("GET", "/v1/storage/snapshots"), { readOnlyHint: true });
-  register(server, "nas_snapshot_manage", "Create, delete, or clone a discovered ZFS snapshot as an asynchronous job.", { action: z.enum(["create", "delete", "clone"]), name: z.string().min(1), target: z.string().optional() }, (args) => request("POST", "/v1/storage/snapshots/action", args), { destructiveHint: true });
+  register(server, "nas_snapshots", "List ZFS snapshots and return QTS snapshot backend capability.", {}, () => request("GET", "/v1/storage/snapshots"), { readOnlyHint: true });
+  register(server, "nas_snapshot_backend", "Read verified QTS snapshot adapter operations before managing QTS snapshots.", {}, () => request("GET", "/v1/storage/snapshots/capabilities"), { readOnlyHint: true });
+  register(server, "nas_snapshot_manage", "Create, delete, or clone a ZFS snapshot as a Job. For QTS create, provide volume as an absolute mount path; snapshot_util resolves the volume ID.", { action: z.enum(["create", "delete", "clone"]), name: z.string().min(1), target: z.string().optional(), volume: z.string().optional() }, (args) => request("POST", "/v1/storage/snapshots/action", args), { destructiveHint: true });
   register(server, "nas_network_info", "Read interfaces, routes and DNS.", {}, () => request("GET", "/v1/network/info"), { readOnlyHint: true });
   register(server, "nas_network_interfaces", "List interfaces, addresses, link state, MAC, speed and duplex.", {}, () => request("GET", "/v1/network/interfaces"), { readOnlyHint: true });
   register(server, "nas_network_routes", "List kernel routes and default gateway.", {}, () => request("GET", "/v1/network/routes"), { readOnlyHint: true });

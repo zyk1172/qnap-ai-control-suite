@@ -499,7 +499,7 @@ func (s *Server) storage(w http.ResponseWriter, r *http.Request) {
 	volumes, volumesErr := s.Storage.Volumes()
 	snapshots, snapshotsErr := s.Storage.Snapshots(r.Context())
 	qts, qtsErr := s.Storage.QTSInventory(r.Context())
-	s.ok(w, r, map[string]any{"qts": qts, "qts_error": errorText(qtsErr), "disks": disks, "disks_error": errorText(disksErr), "raid_groups": raid, "raid_error": errorText(raidErr), "pools": pools, "pools_error": errorText(poolsErr), "volumes": volumes, "volumes_error": errorText(volumesErr), "snapshots": snapshots, "snapshots_error": errorText(snapshotsErr)})
+	s.ok(w, r, map[string]any{"qts": qts, "qts_error": errorText(qtsErr), "disks": disks, "disks_error": errorText(disksErr), "raid_groups": raid, "raid_error": errorText(raidErr), "pools": pools, "pools_error": errorText(poolsErr), "volumes": volumes, "volumes_error": errorText(volumesErr), "snapshots": snapshots, "snapshots_error": errorText(snapshotsErr), "qts_snapshot_backend": s.Storage.QTSSnapshotCapabilities()})
 }
 func (s *Server) storageRoute(w http.ResponseWriter, r *http.Request) bool {
 	path := strings.TrimPrefix(r.URL.Path, "/v1/storage/")

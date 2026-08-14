@@ -145,3 +145,11 @@ func TestFileAPIAcceptsDocumentedSnakeCaseFields(t *testing.T) {
 		t.Fatalf("read status=%d body=%s", w.Code, w.Body.String())
 	}
 }
+
+func TestSnapshotCapabilityEndpointIsStructured(t *testing.T) {
+	s, token := testServer(t)
+	w := request(t, s, token, http.MethodGet, "/v1/storage/snapshots/capabilities", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"supported"`) {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
