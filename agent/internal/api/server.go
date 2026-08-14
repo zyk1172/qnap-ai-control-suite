@@ -283,6 +283,8 @@ func (s *Server) systemInfo(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, 500, "system_info_failed", err.Error(), nil)
 		return
 	}
+	d := s.Discovery.Discover(r.Context())
+	info.QNAP = map[string]any{"platform": d.Platform, "model": d.Model, "firmware": d.Firmware, "arch": d.Arch, "cpu_count": d.CPUCount, "memory_bytes": d.MemoryBytes, "disk_count": d.DiskCount}
 	s.ok(w, r, info)
 }
 func (s *Server) systemResources(w http.ResponseWriter, r *http.Request) {

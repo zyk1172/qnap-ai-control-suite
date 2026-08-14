@@ -105,6 +105,14 @@ func TestStructuredSystemResourcesAndJobs(t *testing.T) {
 	}
 }
 
+func TestSystemInfoIncludesQNAPDiscoverySummary(t *testing.T) {
+	s, token := testServer(t)
+	w := request(t, s, token, http.MethodGet, "/v1/system/info", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"qnap"`) || !strings.Contains(w.Body.String(), `"cpu_count"`) {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestQPKGDryRunUsesDocumentedFlags(t *testing.T) {
 	s, token := testServer(t)
 	w := request(t, s, token, http.MethodPost, "/v1/qnap/qpkg/manage", `{"name":"container-station","action":"start","dry_run":true}`)

@@ -28,6 +28,7 @@ type Info struct {
 	LoadAverage   []float64         `json:"load_average"`
 	Memory        map[string]uint64 `json:"memory_bytes"`
 	Mounts        []Mount           `json:"mounts"`
+	QNAP          map[string]any    `json:"qnap,omitempty"`
 }
 type Mount struct {
 	Device     string `json:"device"`
