@@ -19,6 +19,35 @@ Mac 上安装 Node 20+，然后在 Codex、OpenClaw 或 Hermes 中加入：
 
 不要将真实 `QACS_TOKEN` 放入 Git 配置、截图或公共日志。旧配置中的 `mcp-server.js` 可继续使用。
 
+## 更新已安装的客户端
+
+如果某个智能体已经安装过本 MCP，NAS 更新后不需要改 MCP 协议配置，但需要让该智能体使用当前版本的 Mac bridge：
+
+1. 更新 Mac 上的仓库到 v1.0.16 发布分支：
+
+   ```bash
+   cd /path/to/qnap-ai-control-suite
+   git fetch origin
+   git checkout release/v1.0.16-test-report-fixes
+   git pull
+   cd mac-bridge
+   npm install
+   ```
+
+2. 确认该智能体的 MCP 配置仍指向同一目录下的 `mac-bridge/src/server.js` 或 `mac-bridge/src/mcp-server.js`，不要继续指向旧目录里复制出来的旧 bridge。
+
+3. 重启智能体或重启其 MCP 子进程。MCP 的 `tools/list` 在进程启动时加载，不重启不会拿到 v1.0.16 的新工具和修复。
+
+4. 验证顺序：
+
+   1. `nas_health`，确认返回 `"version":"1.0.16"`。
+   2. `nas_process_list`，确认不再返回空数组。
+   3. `nas_service_list`，确认返回 QNAP QPKG 服务列表。
+   4. `nas_acl_get`，确认能读取 ACL 或返回 stat fallback。
+   5. `nas_qnap_ecosystem`，确认 UPS reason 与状态一致。
+
+如果 `QACS_BASE_URL` 或 `QACS_TOKEN` 没有变化，不需要修改。NAS 上的 Token 改变时，才需要同步更新每个客户端的 `QACS_TOKEN`。
+
 验证顺序：
 
 1. `nas_health`
