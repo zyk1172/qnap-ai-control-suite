@@ -6,6 +6,7 @@ export function registerSystemTools(server) {
   register(server, "nas_health", "Read agent health and active profile.", {}, () => request("GET", "/v1/health"), { readOnlyHint: true });
   register(server, "nas_capabilities", "Read current permissions, privacy and confirmation policy.", {}, () => request("GET", "/v1/capabilities"), { readOnlyHint: true });
   register(server, "nas_discovery", "Discover QNAP platform, utilities, QPKGs and runtime capability states.", {}, () => request("GET", "/v1/qnap/discovery"), { readOnlyHint: true });
+  register(server, "nas_qnap_probe", "Run the QPKG-bundled read-only QNAP runtime probe and write JSON to an absolute NAS path. Use the output to configure private QTS adapters.", { output_path: z.string().min(1), dry_run: z.boolean().optional() }, (args) => request("POST", "/v1/qnap/probe", args), { destructiveHint: true });
   register(server, "nas_system_info", "Read system overview.", {}, () => request("GET", "/v1/system/overview"), { readOnlyHint: true });
   register(server, "nas_system_resources", "Read load and resources.", {}, () => request("GET", "/v1/system/resources"), { readOnlyHint: true });
   register(server, "nas_system_sockets", "List active TCP/UDP sockets from the NAS /proc tables.", {}, () => request("GET", "/v1/system/sockets"), { readOnlyHint: true });

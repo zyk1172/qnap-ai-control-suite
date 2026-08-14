@@ -54,6 +54,7 @@ type Server struct {
 	Shares    shares.Service
 	Logs      logs.Service
 	Ecosystem ecosystem.Service
+	ProbePath string
 	started   time.Time
 	hostname  string
 }
@@ -84,7 +85,15 @@ type requestContext struct {
 func New(cfg config.Config) *Server {
 	executor := qexec.Executor{DefaultTimeout: cfg.Timeout(), MaxOutput: cfg.Command.MaxOutputBytes}
 	host, _ := os.Hostname()
-	return &Server{Config: cfg, Exec: executor, Files: files.Service{Roots: cfg.Permissions.AllowedRoots, MaxInlineBytes: cfg.Files.MaxInlineBytes}, Jobs: jobs.New(cfg.Jobs.MaxHistory), Audit: &audit.Logger{Enabled: cfg.Audit.Enabled, Path: cfg.Audit.Path}, Docker: docker.Service{Exec: executor, Paths: cfg.DockerPaths, RedactSecrets: cfg.Privacy.RedactSecrets}, QPKG: qpkg.Service{Exec: executor}, Discovery: discovery.Service{Exec: executor}, System: qsystem.Service{Exec: executor}, Network: qnetwork.Service{Exec: executor}, Storage: storage.Service{Exec: executor}, Users: users.Service{Exec: executor}, Shares: shares.Service{Exec: executor}, Logs: logs.Service{AuditPath: cfg.Audit.Path, ServicePath: "/var/log/qnap-ai-control-agent/service.log"}, Ecosystem: ecosystem.Service{Discovery: discovery.Service{Exec: executor}, Exec: executor, Adapters: cfg.QNAPAdapters}, started: time.Now(), hostname: host}
+	return &Server{Config: cfg, Exec: executor, Files: files.Service{Roots: cfg.Permissions.AllowedRoots, MaxInlineBytes: cfg.Files.MaxInlineBytes}, Jobs: jobs.New(cfg.Jobs.MaxHistory), Audit: &audit.Logger{Enabled: cfg.Audit.Enabled, Path: cfg.Audit.Path}, Docker: docker.Service{Exec: executor, Paths: cfg.DockerPaths, RedactSecrets: cfg.Privacy.RedactSecrets}, QPKG: qpkg.Service{Exec: executor}, Discovery: discovery.Service{Exec: executor}, System: qsystem.Service{Exec: executor}, Network: qnetwork.Service{Exec: executor}, Storage: storage.Service{Exec: executor}, Users: users.Service{Exec: executor}, Shares: shares.Service{Exec: executor}, Logs: logs.Service{AuditPath: cfg.Audit.Path, ServicePath: "/var/log/qnap-ai-control-agent/service.log"}, Ecosystem: ecosystem.Service{Discovery: discovery.Service{Exec: executor}, Exec: executor, Adapters: cfg.QNAPAdapters}, ProbePath: defaultProbePath(), started: time.Now(), hostname: host}
+}
+
+func defaultProbePath() string {
+	binary, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(binary), "qnap-ai-control-probe")
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -155,6 +164,8 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request) {
 		s.capabilities(w, r)
 	case "/v1/qnap/discovery":
 		s.discovery(w, r)
+	case "/v1/qnap/probe":
+		s.qnapProbe(w, r)
 	case "/v1/system/overview":
 		s.systemOverview(w, r)
 	case "/v1/system/info":
@@ -292,6 +303,43 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r, s.Discovery.Discover(r.Context()))
+}
+func (s *Server) qnapProbe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.fail(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "POST required", nil)
+		return
+	}
+	if s.Config.Profile != "full_trust" {
+		s.fail(w, r, http.StatusForbidden, "forbidden", "QNAP probe requires full_trust", nil)
+		return
+	}
+	var req struct {
+		OutputPath string `json:"output_path"`
+		DryRun     bool   `json:"dry_run"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if !filepath.IsAbs(req.OutputPath) || strings.ContainsRune(req.OutputPath, 0) {
+		s.fail(w, r, http.StatusBadRequest, "invalid_request", "output_path must be an absolute path", nil)
+		return
+	}
+	if s.ProbePath == "" {
+		s.fail(w, r, http.StatusServiceUnavailable, "qnap_probe_unavailable", "QPKG probe script path could not be determined", nil)
+		return
+	}
+	if !req.DryRun {
+		info, err := os.Stat(s.ProbePath)
+		if err != nil || info.IsDir() || info.Mode()&0111 == 0 {
+			s.fail(w, r, http.StatusServiceUnavailable, "qnap_probe_unavailable", "QPKG probe script is not installed", nil)
+			return
+		}
+	}
+	result, err := s.run(r, []string{s.ProbePath, req.OutputPath}, qexec.Request{Timeout: 90 * time.Second, DryRun: req.DryRun})
+	if err == nil {
+		s.audit(r, "qnap.probe", "success", map[string]any{"output_path": req.OutputPath, "dry_run": req.DryRun}, result.DurationMS, "")
+	}
+	s.respondCommand(w, r, result, err)
 }
 func (s *Server) systemOverview(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"host": s.hostname, "os": runtime.GOOS, "arch": runtime.GOARCH, "started_at": s.started.UTC()}

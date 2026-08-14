@@ -167,6 +167,23 @@ func TestSystemInfoIncludesQNAPDiscoverySummary(t *testing.T) {
 	}
 }
 
+func TestQNAPProbeUsesBundledScriptPathAndValidatesOutput(t *testing.T) {
+	s, token := testServer(t)
+	s.ProbePath = "/bin/echo"
+	w := request(t, s, token, http.MethodPost, "/v1/qnap/probe", `{"output_path":"/share/Public/qnap-probe.json","dry_run":true}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"argv":["/bin/echo","/share/Public/qnap-probe.json"]`) || !strings.Contains(w.Body.String(), `"dry_run":true`) {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, s, token, http.MethodPost, "/v1/qnap/probe", `{"output_path":"relative.json","dry_run":true}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "output_path must be an absolute path") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, s, token, http.MethodGet, "/v1/qnap/probe", "")
+	if w.Code != http.StatusMethodNotAllowed || !strings.Contains(w.Body.String(), "POST required") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestQPKGDryRunUsesDocumentedFlags(t *testing.T) {
 	s, token := testServer(t)
 	w := request(t, s, token, http.MethodPost, "/v1/qnap/qpkg/manage", `{"name":"container-station","action":"start","dry_run":true}`)

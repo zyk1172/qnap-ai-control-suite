@@ -2,7 +2,7 @@
 
 Virtualization Station, HBS 3, iSCSI/LUN, certificates, Virtual Switch, QTS persistent system settings, firmware, notifications and deep Storage Manager commands are not stable across QTS and QuTS hero releases. The agent therefore does not invent private QNAP CLI syntax. Instead, `qnap_adapters` binds commands verified on this NAS to domain MCP tools.
 
-1. Run `scripts/qnap_probe.sh` on the NAS after installing the relevant QPKG. It records actual executable paths without reading private keys or certificate contents.
+1. Call MCP `nas_qnap_probe` after installing the relevant QPKG, with an absolute `output_path` such as `/share/Public/qnap-probe.json`. It runs the QPKG-bundled script and records actual executable paths without reading private keys or certificate contents.
 2. Verify each command and its `--help` output on the NAS shell.
 3. Add only the exact absolute argv templates to `/etc/config/qnap-ai-control-agent/config.json`, then restart the QPKG.
 4. Read `nas_qnap_ecosystem`; each configured adapter reports `supported: true` and its action names.
