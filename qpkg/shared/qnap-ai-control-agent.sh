@@ -53,12 +53,47 @@ EOF
   fi
 }
 
+stop_agent_pid() {
+  case "$1" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  if kill -0 "$1" 2>/dev/null; then
+    kill -TERM "$1" 2>/dev/null || true
+    COUNT=0
+    while kill -0 "$1" 2>/dev/null && [ "$COUNT" -lt 10 ]; do
+      sleep 1
+      COUNT=$((COUNT + 1))
+    done
+    kill -0 "$1" 2>/dev/null && kill -KILL "$1" 2>/dev/null || true
+  fi
+}
+
+agent_pid_running() {
+  case "$1" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  /bin/ps -ef 2>/dev/null | /bin/awk -v pid="$1" -v bin="$BIN" '$1 == pid && index($0, bin " -config ") { found=1 } END { exit !found }'
+}
+
+stop_stale_agents() {
+  # QDK upgrades can replace the binary while a pre-v1 process survives with
+  # a missing or stale pidfile. Match only this QPKG's exact agent command.
+  for PID in $(/bin/ps -ef 2>/dev/null | /bin/awk -v bin="$BIN" 'index($0, bin " -config ") { print $1 }'); do
+    stop_agent_pid "$PID"
+  done
+}
+
 start() {
   ensure_config
-  if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-    echo "$QPKG_NAME is already running"
-    exit 0
+  if [ -f "$PIDFILE" ]; then
+    PID=$(cat "$PIDFILE")
+    if agent_pid_running "$PID"; then
+      echo "$QPKG_NAME is already running"
+      exit 0
+    fi
+    rm -f "$PIDFILE"
   fi
+  stop_stale_agents
   (
     trap '' HUP
     exec "$BIN" -config "$CONFIG" >> "$STDOUT_LOG" 2>&1
@@ -70,17 +105,10 @@ start() {
 stop() {
   if [ -f "$PIDFILE" ]; then
     PID=$(cat "$PIDFILE")
-    if kill -0 "$PID" 2>/dev/null; then
-      kill -TERM "$PID"
-      COUNT=0
-      while kill -0 "$PID" 2>/dev/null && [ "$COUNT" -lt 10 ]; do
-        sleep 1
-        COUNT=$((COUNT + 1))
-      done
-      kill -0 "$PID" 2>/dev/null && kill -KILL "$PID"
-    fi
+    agent_pid_running "$PID" && stop_agent_pid "$PID"
     rm -f "$PIDFILE"
   fi
+  stop_stale_agents
   echo "$QPKG_NAME stopped"
 }
 
