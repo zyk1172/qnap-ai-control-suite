@@ -43,6 +43,6 @@ MCP mappings:
 - `nas_notification_action` -> `notifications`
 - `nas_storage_manager_action` -> `storage_manager`
 
-Recommended action names are domain vocabulary, not claims about a QTS command syntax: `virtual_switch` may expose `list`, `configure`, `vlan`, `bond`, `bridge`; `system_settings` may expose `hostname`, `timezone`, `ntp`; `firmware` may expose `info`, `check`, `download`, `install`; `notifications` may expose `list`, `history`, `test`, `configure`; `storage_manager` may expose `pools`, `volumes`, `snapshots`, `expand`, `restore`, `schedule`. The configured action names in `nas_qnap_ecosystem` are authoritative.
+Recommended action names are domain vocabulary, not claims about a QTS command syntax: `virtual_switch` may expose `list`, `configure`, `vlan`, `bond`, `bridge`; `system_settings` may expose `hostname`, `timezone`, `ntp`; `firmware` may expose `info`, `check`, `download`, `install`; `notifications` may expose `list`, `history`, `test`, `configure`; `storage_manager` may expose `pools`, `volumes`, `snapshots`, `expand`, `restore`, `schedule`. On QTS, snapshot list/delete/restore commands discovered through `qcli_volumesnapshot` require an authenticated QCLI `sid`; include that session in the verified command template before enabling the adapter.
 
 For a command not yet verified, use `nas_exec` or `nas_shell` in `full_trust` only after inspecting the NAS-local command help. This is the fallback path; it does not make the corresponding adapter supported.
