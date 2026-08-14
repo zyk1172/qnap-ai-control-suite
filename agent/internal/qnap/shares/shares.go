@@ -13,9 +13,17 @@ import (
 
 type Service struct{ Exec qexec.Executor }
 type Share struct {
-	Name, Path, Comment string
-	Browsable, Writable bool
-	Raw                 map[string]string
+	Name      string            `json:"name"`
+	Path      string            `json:"path"`
+	Comment   string            `json:"comment"`
+	Browsable bool              `json:"browsable"`
+	Writable  bool              `json:"writable"`
+	Raw       map[string]string `json:"raw"`
+}
+type NFSExport struct {
+	Path  string   `json:"path"`
+	Hosts []string `json:"hosts"`
+	Raw   string   `json:"raw"`
 }
 
 func (s Service) List() ([]Share, error) {
@@ -61,6 +69,34 @@ func (s Service) List() ([]Share, error) {
 		}
 	}
 	return out, scan.Err()
+}
+func (s Service) NFS() ([]NFSExport, error) {
+	path := "/etc/config/exports"
+	if _, err := os.Stat(path); err != nil {
+		path = "/etc/exports"
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return ParseNFS(f), nil
+}
+func ParseNFS(r interface{ Read([]byte) (int, error) }) []NFSExport {
+	scan := bufio.NewScanner(r)
+	out := []NFSExport{}
+	for scan.Scan() {
+		line := strings.TrimSpace(scan.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 || !strings.HasPrefix(fields[0], "/") {
+			continue
+		}
+		out = append(out, NFSExport{Path: fields[0], Hosts: fields[1:], Raw: line})
+	}
+	return out
 }
 func (s Service) ACL(ctx context.Context, path string) (qexec.Result, error) {
 	return s.Exec.Run(ctx, qexec.Request{Argv: []string{"/bin/getfacl", "-p", path}, Timeout: 30 * time.Second, MaxOutput: s.Exec.MaxOutput})

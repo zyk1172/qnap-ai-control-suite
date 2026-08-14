@@ -26,6 +26,7 @@ export function registerQNAPTools(server) {
   register(server, "nas_groups", "List local groups from the NAS account database.", {}, () => request("GET", "/v1/groups"), { readOnlyHint: true });
   register(server, "nas_group_manage", "Create, update, or delete a local group using a detected account utility.", { action: z.enum(["create", "update", "delete"]), name: z.string().min(1), args: z.array(z.string()).optional() }, (args) => request("POST", "/v1/groups/manage", args), { destructiveHint: true });
   register(server, "nas_share_list", "List SMB shares from the configured SMB service file.", {}, () => request("GET", "/v1/shares"), { readOnlyHint: true });
+  register(server, "nas_nfs_exports", "List configured NFS exports and host permissions from the NAS exports file.", {}, () => request("GET", "/v1/shares/nfs"), { readOnlyHint: true });
   register(server, "nas_acl_get", "Read POSIX ACL for a path when getfacl is available.", { path: z.string().min(1) }, (args) => request("POST", "/v1/acl", args), { readOnlyHint: true });
   register(server, "nas_acl_set", "Set a POSIX ACL entry when setfacl is available.", { path: z.string().min(1), entry: z.string().min(1) }, (args) => request("POST", "/v1/acl/set", args), { destructiveHint: true });
   register(server, "nas_log_sources", "List available audit, service, system, and kernel log sources.", {}, () => request("GET", "/v1/logs"), { readOnlyHint: true });

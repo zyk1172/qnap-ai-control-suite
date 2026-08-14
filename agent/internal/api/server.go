@@ -675,6 +675,14 @@ func (s *Server) shareRoute(w http.ResponseWriter, r *http.Request) bool {
 			s.ok(w, r, map[string]any{"shares": items})
 		}
 		return true
+	case "/v1/shares/nfs":
+		items, err := s.Shares.NFS()
+		if err != nil {
+			s.fail(w, r, 501, "nfs_inventory_unavailable", err.Error(), nil)
+		} else {
+			s.ok(w, r, map[string]any{"exports": items})
+		}
+		return true
 	case "/v1/acl":
 		var req struct {
 			Path string `json:"path"`
