@@ -14,6 +14,11 @@ ARCH="$(uname -m 2>/dev/null || true)"
 MOUNTS="$(capture mount)"
 MDSTAT="$(capture cat /proc/mdstat)"
 QPKG="$(capture cat /etc/config/qpkg.conf)"
+CONTAINER_DOCKER=""
+for p in /share/CACHEDEV*_DATA/.qpkg/container-station/bin/system-docker /share/CACHEDEV*_DATA/.qpkg/container-station/usr/bin/.libs/docker; do
+  if [ -x "$p" ]; then CONTAINER_DOCKER="$p"; break; fi
+done
+exists() { [ -e "$1" ] && printf true || printf false; }
 
 cat > "$OUT" <<EOF
 {
@@ -30,7 +35,17 @@ cat > "$OUT" <<EOF
     "smartctl": "$(json_string "$(command_path smartctl)")",
     "mdadm": "$(json_string "$(command_path mdadm)")",
     "zpool": "$(json_string "$(command_path zpool)")",
-    "zfs": "$(json_string "$(command_path zfs)")"
+    "zfs": "$(json_string "$(command_path zfs)")",
+    "qcli_storage": "$(json_string "$(command_path qcli_storage)")",
+    "snapshot_util": "$(json_string "$(command_path snapshot_util)")",
+    "upsc": "$(json_string "$(command_path upsc)")",
+    "ip": "$(json_string "$(command_path ip)")",
+    "container_station_docker": "$(json_string "$CONTAINER_DOCKER")"
+  },
+  "configs": {
+    "smb": $(exists /etc/config/smb.conf),
+    "nfs_exports": $(exists /etc/config/exports),
+    "iscsi": $(exists /etc/config/iscsi.conf)
   },
   "mount": "$(json_string "$MOUNTS")",
   "mdstat": "$(json_string "$MDSTAT")",
