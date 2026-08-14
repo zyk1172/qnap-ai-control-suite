@@ -1,6 +1,9 @@
 package files
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
@@ -17,15 +20,19 @@ type Service struct {
 	MaxInlineBytes int64
 }
 type Entry struct {
-	Name, Path, Mode string
-	IsDir, IsSymlink bool
-	Size             int64
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	Mode      string `json:"mode"`
+	IsDir     bool   `json:"is_dir"`
+	IsSymlink bool   `json:"is_symlink"`
+	Size      int64  `json:"size"`
 }
 type ReadResult struct {
-	Path, ContentBase64 string
-	Bytes               int64
-	Offset              int64
-	Truncated           bool
+	Path          string `json:"path"`
+	ContentBase64 string `json:"content_base64"`
+	Bytes         int64  `json:"bytes"`
+	Offset        int64  `json:"offset"`
+	Truncated     bool   `json:"truncated"`
 }
 type SearchResult struct {
 	Path  string `json:"path"`
@@ -293,7 +300,7 @@ func (s Service) authorizeParent(path string) error {
 	}
 }
 func (s Service) Manage(action, path, target string, mode os.FileMode, recursive bool) error {
-	writeActions := map[string]bool{"mkdir": true, "touch": true, "copy": true, "move": true, "rename": true, "delete": true, "chmod": true, "chown": true, "truncate": true, "symlink": true, "hardlink": true}
+	writeActions := map[string]bool{"mkdir": true, "touch": true, "copy": true, "move": true, "rename": true, "delete": true, "chmod": true, "chown": true, "truncate": true, "symlink": true, "hardlink": true, "archive": true, "extract": true}
 	if !writeActions[action] {
 		return fmt.Errorf("unsupported file action: %s", action)
 	}
@@ -344,7 +351,7 @@ func (s Service) Manage(action, path, target string, mode os.FileMode, recursive
 	if target == "" {
 		return errors.New("target is required")
 	}
-	targetResolved, err := s.Resolve(target, action == "copy" || action == "move" || action == "rename")
+	targetResolved, err := s.Resolve(target, action == "copy" || action == "move" || action == "rename" || action == "archive" || action == "extract")
 	if err != nil {
 		return err
 	}
@@ -357,6 +364,16 @@ func (s Service) Manage(action, path, target string, mode os.FileMode, recursive
 		return os.Symlink(targetResolved, resolved)
 	case "hardlink":
 		return os.Link(targetResolved, resolved)
+	case "archive":
+		return archivePath(resolved, targetResolved)
+	case "extract":
+		if err := s.authorizeParent(target); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(targetResolved, 0755); err != nil {
+			return err
+		}
+		return extractPath(resolved, targetResolved)
 	}
 	return nil
 }
@@ -398,4 +415,239 @@ func copyFile(from, to string) error {
 		return copyErr
 	}
 	return closeErr
+}
+
+func archivePath(source, target string) error {
+	switch {
+	case strings.HasSuffix(strings.ToLower(target), ".zip"):
+		return writeZip(source, target)
+	case strings.HasSuffix(strings.ToLower(target), ".tar"), strings.HasSuffix(strings.ToLower(target), ".tar.gz"), strings.HasSuffix(strings.ToLower(target), ".tgz"):
+		return writeTar(source, target)
+	default:
+		return errors.New("archive target must end in .zip, .tar, .tar.gz, or .tgz")
+	}
+}
+
+func extractPath(source, target string) error {
+	lower := strings.ToLower(source)
+	switch {
+	case strings.HasSuffix(lower, ".zip"):
+		return extractZip(source, target)
+	case strings.HasSuffix(lower, ".tar"), strings.HasSuffix(lower, ".tar.gz"), strings.HasSuffix(lower, ".tgz"):
+		return extractTar(source, target)
+	default:
+		return errors.New("archive source must end in .zip, .tar, .tar.gz, or .tgz")
+	}
+}
+
+func writeZip(source, target string) error {
+	out, err := os.Create(target)
+	if err != nil {
+		return err
+	}
+	zw := zip.NewWriter(out)
+	err = walkArchive(source, func(path, name string, info os.FileInfo) error {
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+		header.Name = name
+		if info.IsDir() {
+			header.Name += "/"
+		} else {
+			header.Method = zip.Deflate
+		}
+		writer, err := zw.CreateHeader(header)
+		if err != nil || info.IsDir() {
+			return err
+		}
+		return copyPath(path, writer)
+	})
+	closeErr := zw.Close()
+	fileErr := out.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return fileErr
+}
+
+func writeTar(source, target string) error {
+	out, err := os.Create(target)
+	if err != nil {
+		return err
+	}
+	var writer io.Writer = out
+	var gz *gzip.Writer
+	if strings.HasSuffix(strings.ToLower(target), ".tar.gz") || strings.HasSuffix(strings.ToLower(target), ".tgz") {
+		gz = gzip.NewWriter(out)
+		writer = gz
+	}
+	tw := tar.NewWriter(writer)
+	err = walkArchive(source, func(path, name string, info os.FileInfo) error {
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		header.Name = name
+		if err := tw.WriteHeader(header); err != nil || info.IsDir() {
+			return err
+		}
+		return copyPath(path, tw)
+	})
+	closeErr := tw.Close()
+	if gz != nil {
+		if err := gz.Close(); closeErr == nil {
+			closeErr = err
+		}
+	}
+	fileErr := out.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return fileErr
+}
+
+func walkArchive(source string, visit func(path, name string, info os.FileInfo) error) error {
+	rootInfo, err := os.Stat(source)
+	if err != nil {
+		return err
+	}
+	base := filepath.Base(source)
+	if !rootInfo.IsDir() {
+		return visit(source, base, rootInfo)
+	}
+	return filepath.Walk(source, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(filepath.Dir(source), path)
+		if err != nil {
+			return err
+		}
+		return visit(path, filepath.ToSlash(rel), info)
+	})
+}
+
+func extractZip(source, target string) error {
+	reader, err := zip.OpenReader(source)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	for _, file := range reader.File {
+		path, err := archiveDestination(target, file.Name)
+		if err != nil {
+			return err
+		}
+		info := file.FileInfo()
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("archive symlink entries are not supported")
+		}
+		if info.IsDir() {
+			if err := os.MkdirAll(path, info.Mode()); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return err
+		}
+		in, err := file.Open()
+		if err != nil {
+			return err
+		}
+		out, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+		if err == nil {
+			_, err = io.Copy(out, in)
+			closeErr := out.Close()
+			if err == nil {
+				err = closeErr
+			}
+		}
+		in.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func extractTar(source, target string) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	var reader io.Reader = in
+	if strings.HasSuffix(strings.ToLower(source), ".tar.gz") || strings.HasSuffix(strings.ToLower(source), ".tgz") {
+		gz, err := gzip.NewReader(in)
+		if err != nil {
+			return err
+		}
+		defer gz.Close()
+		reader = gz
+	}
+	tr := tar.NewReader(reader)
+	for {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		path, err := archiveDestination(target, header.Name)
+		if err != nil {
+			return err
+		}
+		switch header.Typeflag {
+		case tar.TypeDir:
+			err = os.MkdirAll(path, os.FileMode(header.Mode))
+		case tar.TypeReg, tar.TypeRegA:
+			if err = os.MkdirAll(filepath.Dir(path), 0755); err == nil {
+				var out *os.File
+				out, err = os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+				if err == nil {
+					_, err = io.Copy(out, tr)
+					closeErr := out.Close()
+					if err == nil {
+						err = closeErr
+					}
+				}
+			}
+		default:
+			return errors.New("archive link and special entries are not supported")
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func archiveDestination(root, name string) (string, error) {
+	clean := filepath.Clean(filepath.FromSlash(name))
+	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
+		return "", errors.New("archive entry escapes destination")
+	}
+	path := filepath.Join(root, clean)
+	if !within(path, root) {
+		return "", errors.New("archive entry escapes destination")
+	}
+	return path, nil
+}
+
+func copyPath(path string, writer io.Writer) error {
+	in, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	_, err = io.Copy(writer, in)
+	return err
 }

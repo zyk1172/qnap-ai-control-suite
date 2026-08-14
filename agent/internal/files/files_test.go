@@ -93,3 +93,33 @@ func TestAppendTailSearchAndDU(t *testing.T) {
 		t.Fatalf("du=%d err=%v", bytes, err)
 	}
 }
+
+func TestArchiveAndExtractZIP(t *testing.T) {
+	root := t.TempDir()
+	s := Service{Roots: []string{root}, MaxInlineBytes: 1024}
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(filepath.Join(source, "nested"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "nested", "data.bin"), []byte{0, 255, 2}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(root, "backup.zip")
+	if err := s.Manage("archive", source, archive, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(root, "restore")
+	if err := s.Manage("extract", archive, destination, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(destination, "source", "nested", "data.bin"))
+	if err != nil || string(got) != string([]byte{0, 255, 2}) {
+		t.Fatalf("got=%v err=%v", got, err)
+	}
+}
+
+func TestArchiveDestinationRejectsTraversal(t *testing.T) {
+	if _, err := archiveDestination("/safe", "../../etc/passwd"); err == nil {
+		t.Fatal("expected traversal rejection")
+	}
+}

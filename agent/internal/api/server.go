@@ -547,8 +547,12 @@ func (s *Server) storageRoute(w http.ResponseWriter, r *http.Request) bool {
 		if err != nil {
 			s.fail(w, r, 500, "snapshots_inventory_failed", err.Error(), nil)
 		} else {
-			s.ok(w, r, map[string]any{"snapshots": items})
+			s.ok(w, r, map[string]any{"snapshots": items, "qts_backend": s.Storage.QTSSnapshotCapabilities()})
 		}
+		return true
+	}
+	if path == "snapshots/capabilities" {
+		s.ok(w, r, s.Storage.QTSSnapshotCapabilities())
 		return true
 	}
 	if strings.HasPrefix(path, "disks/") {
@@ -590,11 +594,22 @@ func (s *Server) storageRoute(w http.ResponseWriter, r *http.Request) bool {
 		}
 	}
 	if path == "snapshots/action" {
-		var req struct{ Action, Name, Target string }
+		var req struct {
+			Action string `json:"action"`
+			Name   string `json:"name"`
+			Target string `json:"target"`
+			Volume string `json:"volume"`
+		}
 		if !decode(w, r, &req) {
 			return true
 		}
 		job := s.Jobs.Start("snapshot-"+req.Action, func(ctx context.Context, log func(string)) (any, error) {
+			if req.Volume != "" {
+				if req.Action != "create" {
+					return nil, errors.New("QTS snapshot adapter currently supports create only")
+				}
+				return s.Storage.CreateQTSSnapshot(ctx, req.Volume, req.Name)
+			}
 			result, err := s.Storage.SnapshotAction(ctx, req.Action, req.Name, req.Target)
 			log(result.Stdout)
 			log(result.Stderr)
@@ -625,8 +640,9 @@ func (s *Server) userRoute(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	case "/v1/users/manage":
 		var req struct {
-			Action, Name string
-			Args         []string
+			Action string   `json:"action"`
+			Name   string   `json:"name"`
+			Args   []string `json:"args"`
 		}
 		if !decode(w, r, &req) {
 			return true
@@ -636,8 +652,9 @@ func (s *Server) userRoute(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	case "/v1/groups/manage":
 		var req struct {
-			Action, Name string
-			Args         []string
+			Action string   `json:"action"`
+			Name   string   `json:"name"`
+			Args   []string `json:"args"`
 		}
 		if !decode(w, r, &req) {
 			return true
@@ -659,7 +676,9 @@ func (s *Server) shareRoute(w http.ResponseWriter, r *http.Request) bool {
 		}
 		return true
 	case "/v1/acl":
-		var req struct{ Path string }
+		var req struct {
+			Path string `json:"path"`
+		}
 		if !decode(w, r, &req) {
 			return true
 		}
@@ -667,7 +686,10 @@ func (s *Server) shareRoute(w http.ResponseWriter, r *http.Request) bool {
 		s.respondCommand(w, r, result, err)
 		return true
 	case "/v1/acl/set":
-		var req struct{ Path, Entry string }
+		var req struct {
+			Path  string `json:"path"`
+			Entry string `json:"entry"`
+		}
 		if !decode(w, r, &req) {
 			return true
 		}
@@ -775,8 +797,9 @@ func (s *Server) fileStat(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) fileRead(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Path             string `json:"path"`
-		Offset, MaxBytes int64
+		Path     string `json:"path"`
+		Offset   int64  `json:"offset"`
+		MaxBytes int64  `json:"max_bytes"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -790,8 +813,11 @@ func (s *Server) fileRead(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) fileWrite(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Path, ContentBase64, Mode string
-		CreateParents, DryRun     bool
+		Path          string `json:"path"`
+		ContentBase64 string `json:"content_base64"`
+		Mode          string `json:"mode"`
+		CreateParents bool   `json:"create_parents"`
+		DryRun        bool   `json:"dry_run"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -824,8 +850,10 @@ func (s *Server) fileWrite(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) fileAppend(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Path, ContentBase64, Mode string
-		CreateParents             bool
+		Path          string `json:"path"`
+		ContentBase64 string `json:"content_base64"`
+		Mode          string `json:"mode"`
+		CreateParents bool   `json:"create_parents"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -853,8 +881,11 @@ func (s *Server) fileAppend(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) fileManage(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Action, Path, Target, Mode string
-		Recursive                  bool
+		Action    string `json:"action"`
+		Path      string `json:"path"`
+		Target    string `json:"target"`
+		Mode      string `json:"mode"`
+		Recursive bool   `json:"recursive"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -875,7 +906,9 @@ func (s *Server) fileManage(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r, map[string]any{"action": req.Action, "path": req.Path, "target": req.Target})
 }
 func (s *Server) fileChecksum(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Path string }
+	var req struct {
+		Path string `json:"path"`
+	}
 	if !decode(w, r, &req) {
 		return
 	}
@@ -888,8 +921,9 @@ func (s *Server) fileChecksum(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) fileSearch(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Path, Query string
-		Limit       int
+		Path  string `json:"path"`
+		Query string `json:"query"`
+		Limit int    `json:"limit"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -903,9 +937,9 @@ func (s *Server) fileSearch(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) fileTail(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Path     string
-		Lines    int
-		MaxBytes int64
+		Path     string `json:"path"`
+		Lines    int    `json:"lines"`
+		MaxBytes int64  `json:"max_bytes"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -918,7 +952,9 @@ func (s *Server) fileTail(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r, map[string]any{"path": req.Path, "lines": lines})
 }
 func (s *Server) fileDU(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Path string }
+	var req struct {
+		Path string `json:"path"`
+	}
 	if !decode(w, r, &req) {
 		return
 	}

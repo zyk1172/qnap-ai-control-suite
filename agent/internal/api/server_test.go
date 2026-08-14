@@ -132,3 +132,16 @@ func TestDockerDryRunPreservesExecutorInputs(t *testing.T) {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }
+
+func TestFileAPIAcceptsDocumentedSnakeCaseFields(t *testing.T) {
+	s, token := testServer(t)
+	path := t.TempDir() + "/nested/data.bin"
+	w := request(t, s, token, http.MethodPost, "/v1/files/write", `{"path":"`+path+`","content_base64":"AP8C","create_parents":true}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"bytes":3`) {
+		t.Fatalf("write status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, s, token, http.MethodPost, "/v1/files/read", `{"path":"`+path+`","offset":1,"max_bytes":2}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"content_base64":"/wI="`) {
+		t.Fatalf("read status=%d body=%s", w.Code, w.Body.String())
+	}
+}

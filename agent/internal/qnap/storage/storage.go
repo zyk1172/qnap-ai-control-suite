@@ -310,6 +310,40 @@ func (s Service) SnapshotAction(ctx context.Context, action, name, target string
 	}
 	return qexec.Result{}, fmt.Errorf("unsupported snapshot action: %s", action)
 }
+
+func (s Service) QTSSnapshotCapabilities() map[string]any {
+	path := snapshotUtil()
+	if path == "" {
+		return map[string]any{"supported": false, "reason": "QTS snapshot_util was not discovered"}
+	}
+	return map[string]any{"supported": true, "backend": "qts-snapshot_util", "operations": []string{"create"}, "reason": "list/delete/restore require further runtime probe"}
+}
+
+// CreateQTSSnapshot uses QTS snapshot_util commands observed on the NAS:
+// get_volume_id, check_volume, and create_snapshot_for_app.
+func (s Service) CreateQTSSnapshot(ctx context.Context, volume, name string) (map[string]any, error) {
+	path := snapshotUtil()
+	if path == "" {
+		return nil, errors.New("QTS snapshot_util was not discovered")
+	}
+	if !filepath.IsAbs(volume) || strings.TrimSpace(name) == "" || strings.ContainsAny(name, "/\\\x00\n\r") {
+		return nil, errors.New("volume must be an absolute mount path and snapshot name must be a simple name")
+	}
+	idResult, err := s.Exec.Run(ctx, qexec.Request{Argv: []string{path, "get_volume_id", volume}, Timeout: 30 * time.Second, MaxOutput: s.Exec.MaxOutput})
+	if err != nil {
+		return map[string]any{"volume_id_command": idResult}, err
+	}
+	volumeID := strings.TrimSpace(idResult.Stdout)
+	if volumeID == "" {
+		return map[string]any{"volume_id_command": idResult}, errors.New("snapshot_util returned an empty volume id")
+	}
+	checkResult, err := s.Exec.Run(ctx, qexec.Request{Argv: []string{path, "check_volume", volumeID}, Timeout: 30 * time.Second, MaxOutput: s.Exec.MaxOutput})
+	if err != nil {
+		return map[string]any{"volume_id": volumeID, "check_volume_command": checkResult}, err
+	}
+	createResult, err := s.Exec.Run(ctx, qexec.Request{Argv: []string{path, "create_snapshot_for_app", volumeID, name}, Timeout: 90 * time.Second, MaxOutput: s.Exec.MaxOutput})
+	return map[string]any{"backend": "qts-snapshot_util", "volume": volume, "volume_id": volumeID, "name": name, "volume_id_command": idResult, "check_volume_command": checkResult, "create_command": createResult}, err
+}
 func read(base, name string) string {
 	b, err := os.ReadFile(filepath.Join(base, name))
 	if err != nil {
@@ -337,6 +371,9 @@ func zfs() string {
 }
 func qcli() string {
 	return executable([]string{"/sbin/qcli_storage", "/usr/sbin/qcli_storage", "/bin/qcli_storage", "/usr/bin/qcli_storage"})
+}
+func snapshotUtil() string {
+	return executable([]string{"/sbin/snapshot_util", "/usr/sbin/snapshot_util", "/bin/snapshot_util", "/usr/bin/snapshot_util"})
 }
 func executable(paths []string) string {
 	for _, path := range paths {
