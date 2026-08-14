@@ -12,8 +12,8 @@ QNAP TS-264C 使用 amd64：
 脚本从仓库 `VERSION` 读取版本，并注入 agent、QPKG 元数据和 artifact 名。正式包输出为：
 
 ```text
-dist/QnapAIControl_1.0.8.qpkg
-dist/QnapAIControl_1.0.8.qpkg.md5
+dist/QnapAIControl_1.0.9.qpkg
+dist/QnapAIControl_1.0.9.qpkg.md5
 ```
 
 需要 QNAP QDK `qbuild`。没有 QDK 时只会生成 staging archive，不能上传 App Center。
@@ -25,7 +25,7 @@ dist/QnapAIControl_1.0.8.qpkg.md5
 3. 打开 `http://NAS_IP:8756/`。
 4. 从 `/etc/config/qnap-ai-control-agent/initial-token.txt` 读取 token，填入 WebUI。
 
-首次安装生成 `full_trust` v1 配置。原有 0.3.x 配置可被 agent 自动读取并迁移为内存 v1 设置；升级不会因旧字段而启动失败。
+首次安装生成 `full_trust` v1 配置。原有 0.3.x 配置会保留 Bearer Token hash、监听地址、日志路径、文件大小上限、命令超时和 Docker 路径，并自动迁移为 `full_trust` v1 设置；升级不会因旧字段而启动失败，也不会继续保留旧 allowlist 的受限行为。
 
 ## 真机验证与集成检查
 

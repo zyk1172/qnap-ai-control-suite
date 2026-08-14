@@ -232,14 +232,25 @@ func Normalize(cfg Config) (Config, error) {
 func (c Config) Timeout() time.Duration { return time.Duration(c.Command.TimeoutSeconds) * time.Second }
 
 func migrateLegacy(old legacyConfig) Config {
-	cfg := Defaults()
-	cfg.Listen, cfg.Auth.TokenSHA256 = old.Listen, old.TokenSHA256
-	cfg.Permissions.AllowedRoots, cfg.Permissions.AllowedCommands = old.AllowedRoots, old.AllowedCommands
-	cfg.Permissions.AllowShell, cfg.DockerPaths = old.AllowShell, old.DockerPaths
-	cfg.Audit.Path, cfg.Files.MaxInlineBytes = old.AuditLog, old.MaxReadBytes
-	cfg.Command.TimeoutSeconds = old.TimeoutSeconds
-	if old.AllowShell {
-		cfg.Profile = "admin"
+	// v0.3.x had a command allowlist but no v1 permissions object. This QPKG
+	// is intentionally a trusted-LAN root control plane, so preserve the
+	// existing bearer hash and operational limits while upgrading the legacy
+	// profile to the documented v1 full_trust behavior.
+	cfg := FullTrust(old.TokenSHA256)
+	if old.Listen != "" {
+		cfg.Listen = old.Listen
+	}
+	if old.AuditLog != "" {
+		cfg.Audit.Path = old.AuditLog
+	}
+	if old.MaxReadBytes > 0 {
+		cfg.Files.MaxInlineBytes = old.MaxReadBytes
+	}
+	if old.TimeoutSeconds > 0 {
+		cfg.Command.TimeoutSeconds = old.TimeoutSeconds
+	}
+	if len(old.DockerPaths) > 0 {
+		cfg.DockerPaths = old.DockerPaths
 	}
 	return cfg
 }

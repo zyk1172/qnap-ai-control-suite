@@ -16,7 +16,7 @@ func TestMigratesLegacy032(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Version != 1 || cfg.Auth.TokenSHA256 != "abc" || cfg.Files.MaxInlineBytes != 1024 || cfg.Command.TimeoutSeconds != 9 {
+	if cfg.Version != 1 || cfg.Auth.TokenSHA256 != "abc" || cfg.Files.MaxInlineBytes != 1024 || cfg.Command.TimeoutSeconds != 9 || cfg.Profile != "full_trust" || !cfg.Permissions.AllowAnyCommand || !cfg.Permissions.AllowShell || cfg.Confirmation.Mode != "off" {
 		t.Fatalf("migration failed: %+v", cfg)
 	}
 }
