@@ -26,7 +26,7 @@ test("official MCP server negotiates and lists v1 tools", async () => {
   child.kill("SIGTERM");
   await once(child, "exit");
   const messages = lines.slice(0, 2).map(JSON.parse);
-  assert.equal(messages[0].result.serverInfo.version, "1.0.11");
+  assert.equal(messages[0].result.serverInfo.version, "1.0.12");
   const names = messages[1].result.tools.map((tool) => tool.name);
   assert.ok(names.includes("nas_exec"));
   assert.ok(names.includes("nas_file_read"));
@@ -35,6 +35,11 @@ test("official MCP server negotiates and lists v1 tools", async () => {
   assert.ok(names.includes("nas_disks"));
   assert.ok(names.includes("nas_raid_manage"));
   assert.ok(names.includes("nas_job_start"));
+  assert.ok(names.includes("nas_virtual_switch_action"));
+  assert.ok(names.includes("nas_system_config_action"));
+  assert.ok(names.includes("nas_firmware_action"));
+  assert.ok(names.includes("nas_notification_action"));
+  assert.ok(names.includes("nas_storage_manager_action"));
   assert.ok(names.includes("nas_users"));
   assert.ok(names.includes("nas_log_tail"));
   assert.ok(names.includes("nas_network_manage"));

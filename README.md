@@ -2,7 +2,7 @@
 
 QNAP AI Control Suite v1 是面向 Codex、OpenClaw、Hermes 与其他 MCP client 的 QNAP 本地控制平面。它在 NAS 上运行一个单二进制 Go agent，并在 Mac 上通过官方 MCP SDK 提供 stdio bridge。
 
-## v1.0.11
+## v1.0.12
 
 - `full_trust` profile：根文件系统、任意 executable、shell pipeline、Docker/QPKG 写操作均可直接执行，仍保留 Bearer 认证与 JSONL 审计。
 - 有界 command executor：区分非零退出、超时、找不到 executable 和启动失败；支持 `cwd`、环境变量、stdin、dry run 与独立 stdout/stderr 截断标志。
@@ -20,6 +20,7 @@ QNAP AI Control Suite v1 是面向 Codex、OpenClaw、Hermes 与其他 MCP clien
 - 从 0.3.x 升级时自动保留 Bearer Token hash 和运行参数，并按 v1 的 `full_trust` 权限模型运行，不再被旧 allowlist 限制。
 - mdraid inventory 现在返回阵列健康位图、成员数与 recovery/resync/reshape/check/repair 进度；新增可验证的 `nas_raid_manage` scrub 控制，并为 ZFS snapshots 增加 restore（rollback）Job。
 - `nas_job_start` 现可异步执行任意 argv 或明确 shell/script，支持 cwd、env、binary stdin、timeout 和 dry run；Job metadata 不再返回完整日志，改为有界 cursor 分页。
+- 新增 probe 驱动的 Virtual Switch、QTS system settings、firmware、notifications 与 Storage Manager MCP adapter 入口；未知 QTS 私有命令不会被猜测或伪造。
 
 ## 安装
 
@@ -29,7 +30,7 @@ QNAP AI Control Suite v1 是面向 Codex、OpenClaw、Hermes 与其他 MCP clien
 ./scripts/package_qpkg.sh amd64
 ```
 
-将 `dist/QnapAIControl_1.0.11.qpkg` 上传到 App Center 手动安装。首次启动会生成 bearer token 和 `full_trust` 配置。打开：
+将 `dist/QnapAIControl_1.0.12.qpkg` 上传到 App Center 手动安装。首次启动会生成 bearer token 和 `full_trust` 配置。打开：
 
 ```text
 http://NAS_IP:8756/

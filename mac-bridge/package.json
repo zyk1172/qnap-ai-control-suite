@@ -1,6 +1,6 @@
 {
   "name": "qnap-ai-control-mcp",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "type": "module",
   "private": true,
   "bin": {

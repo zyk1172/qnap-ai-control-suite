@@ -211,6 +211,16 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request) {
 		s.ecosystemCommand(w, r, "iscsi")
 	case "/v1/qnap/certificates/action":
 		s.ecosystemCommand(w, r, "certificates")
+	case "/v1/qnap/virtual-switch/action":
+		s.ecosystemCommand(w, r, "virtual_switch")
+	case "/v1/qnap/system-settings/action":
+		s.ecosystemCommand(w, r, "system_settings")
+	case "/v1/qnap/firmware/action":
+		s.ecosystemCommand(w, r, "firmware")
+	case "/v1/qnap/notifications/action":
+		s.ecosystemCommand(w, r, "notifications")
+	case "/v1/qnap/storage/action":
+		s.ecosystemCommand(w, r, "storage_manager")
 	case "/v1/qnap/certificates/inspect":
 		s.certificateInspect(w, r)
 	case "/v1/files/list":

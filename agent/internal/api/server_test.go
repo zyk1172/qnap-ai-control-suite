@@ -262,8 +262,13 @@ func TestLogTailAcceptsRFC3339Window(t *testing.T) {
 func TestConfiguredEcosystemAdapterDryRun(t *testing.T) {
 	s, token := testServer(t)
 	s.Config.QNAPAdapters = map[string]config.QNAPAdapter{
-		"hbs3":   {Commands: map[string][]string{"job_status": {"/bin/echo", "status", "{id}"}}},
-		"shares": {Commands: map[string][]string{"rename": {"/bin/echo", "share", "rename", "{name}", "{target}"}}},
+		"hbs3":            {Commands: map[string][]string{"job_status": {"/bin/echo", "status", "{id}"}}},
+		"shares":          {Commands: map[string][]string{"rename": {"/bin/echo", "share", "rename", "{name}", "{target}"}}},
+		"virtual_switch":  {Commands: map[string][]string{"list": {"/bin/echo", "virtual-switch", "list"}}},
+		"system_settings": {Commands: map[string][]string{"hostname": {"/bin/echo", "system", "hostname", "{name}"}}},
+		"firmware":        {Commands: map[string][]string{"info": {"/bin/echo", "firmware", "info"}}},
+		"notifications":   {Commands: map[string][]string{"test": {"/bin/echo", "notification", "test", "{target}"}}},
+		"storage_manager": {Commands: map[string][]string{"pools": {"/bin/echo", "storage", "pools"}}},
 	}
 	s.Ecosystem.Adapters = s.Config.QNAPAdapters
 	w := request(t, s, token, http.MethodPost, "/v1/qnap/hbs/action", `{"action":"job_status","id":"backup-1","dry_run":true}`)
@@ -277,5 +282,21 @@ func TestConfiguredEcosystemAdapterDryRun(t *testing.T) {
 	w = request(t, s, token, http.MethodPost, "/v1/shares/manage", `{"action":"rename","name":"old","target":"new","dry_run":true}`)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"argv":["/bin/echo","share","rename","old","new"]`) || !strings.Contains(w.Body.String(), `"adapter":"shares"`) {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	for _, item := range []struct {
+		path string
+		body string
+		want string
+	}{
+		{"/v1/qnap/virtual-switch/action", `{"action":"list","dry_run":true}`, `"argv":["/bin/echo","virtual-switch","list"]`},
+		{"/v1/qnap/system-settings/action", `{"action":"hostname","name":"nas","dry_run":true}`, `"argv":["/bin/echo","system","hostname","nas"]`},
+		{"/v1/qnap/firmware/action", `{"action":"info","dry_run":true}`, `"argv":["/bin/echo","firmware","info"]`},
+		{"/v1/qnap/notifications/action", `{"action":"test","target":"mail","dry_run":true}`, `"argv":["/bin/echo","notification","test","mail"]`},
+		{"/v1/qnap/storage/action", `{"action":"pools","dry_run":true}`, `"argv":["/bin/echo","storage","pools"]`},
+	} {
+		w = request(t, s, token, http.MethodPost, item.path, item.body)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), item.want) {
+			t.Fatalf("path=%s status=%d body=%s", item.path, w.Code, w.Body.String())
+		}
 	}
 }

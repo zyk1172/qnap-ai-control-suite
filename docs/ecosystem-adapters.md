@@ -1,6 +1,6 @@
 # Ecosystem Adapter Commands
 
-Virtualization Station, HBS 3, iSCSI/LUN and certificate commands are not stable across QTS and QuTS hero releases. The agent therefore does not invent private QNAP CLI syntax. Instead, `qnap_adapters` binds commands verified on this NAS to domain MCP tools.
+Virtualization Station, HBS 3, iSCSI/LUN, certificates, Virtual Switch, QTS persistent system settings, firmware, notifications and deep Storage Manager commands are not stable across QTS and QuTS hero releases. The agent therefore does not invent private QNAP CLI syntax. Instead, `qnap_adapters` binds commands verified on this NAS to domain MCP tools.
 
 1. Run `scripts/qnap_probe.sh` on the NAS after installing the relevant QPKG. It records actual executable paths without reading private keys or certificate contents.
 2. Verify each command and its `--help` output on the NAS shell.
@@ -37,5 +37,12 @@ MCP mappings:
 - `nas_iscsi_action` -> `iscsi`
 - `nas_certificate_action` -> `certificates`
 - `nas_share_manage` -> `shares`
+- `nas_virtual_switch_action` -> `virtual_switch`
+- `nas_system_config_action` -> `system_settings`
+- `nas_firmware_action` -> `firmware`
+- `nas_notification_action` -> `notifications`
+- `nas_storage_manager_action` -> `storage_manager`
+
+Recommended action names are domain vocabulary, not claims about a QTS command syntax: `virtual_switch` may expose `list`, `configure`, `vlan`, `bond`, `bridge`; `system_settings` may expose `hostname`, `timezone`, `ntp`; `firmware` may expose `info`, `check`, `download`, `install`; `notifications` may expose `list`, `history`, `test`, `configure`; `storage_manager` may expose `pools`, `volumes`, `snapshots`, `expand`, `restore`, `schedule`. The configured action names in `nas_qnap_ecosystem` are authoritative.
 
 For a command not yet verified, use `nas_exec` or `nas_shell` in `full_trust` only after inspecting the NAS-local command help. This is the fallback path; it does not make the corresponding adapter supported.
