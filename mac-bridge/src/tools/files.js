@@ -1,0 +1,17 @@
+import { Buffer } from "node:buffer";
+import { request } from "../client.js";
+import { register, z } from "./register.js";
+
+export function registerFileTools(server) {
+  register(server, "nas_file_list", "List a permitted NAS directory.", { path: z.string().min(1) }, ({ path }) => request("GET", `/v1/files/list?path=${encodeURIComponent(path)}`), { readOnlyHint: true });
+  register(server, "nas_file_stat", "Stat a permitted NAS path.", { path: z.string().min(1) }, ({ path }) => request("GET", `/v1/files/stat?path=${encodeURIComponent(path)}`), { readOnlyHint: true });
+  register(server, "nas_file_read", "Read a binary-safe file range. Content stays base64 encoded.", { path: z.string().min(1), offset: z.number().int().nonnegative().optional(), max_bytes: z.number().int().positive().optional() }, (args) => request("POST", "/v1/files/read", args), { readOnlyHint: true });
+  register(server, "nas_file_write", "Write UTF-8 text to a permitted NAS path.", { path: z.string().min(1), content: z.string(), mode: z.string().optional(), create_parents: z.boolean().optional(), dry_run: z.boolean().optional() }, (args) => request("POST", "/v1/files/write", { ...args, content_base64: Buffer.from(args.content, "utf8").toString("base64"), content: undefined }), { destructiveHint: true });
+  register(server, "nas_file_write_binary", "Write base64 binary content to a permitted NAS path.", { path: z.string().min(1), content_base64: z.string(), mode: z.string().optional(), create_parents: z.boolean().optional(), dry_run: z.boolean().optional() }, (args) => request("POST", "/v1/files/write", args), { destructiveHint: true });
+  register(server, "nas_file_append", "Append UTF-8 text to a permitted NAS path.", { path: z.string().min(1), content: z.string(), mode: z.string().optional(), create_parents: z.boolean().optional() }, (args) => request("POST", "/v1/files/append", { ...args, content_base64: Buffer.from(args.content, "utf8").toString("base64"), content: undefined }), { destructiveHint: true });
+  register(server, "nas_file_manage", "Manage paths with mkdir, touch, copy, move, rename, delete, chmod, chown, truncate, symlink, or hardlink.", { action: z.enum(["mkdir", "touch", "copy", "move", "rename", "delete", "chmod", "chown", "truncate", "symlink", "hardlink"]), path: z.string().min(1), target: z.string().optional(), mode: z.string().optional(), recursive: z.boolean().optional() }, (args) => request("POST", "/v1/files/manage", args), { destructiveHint: true });
+  register(server, "nas_file_search", "Search permitted path names with a bounded result set.", { path: z.string().min(1), query: z.string().min(1), limit: z.number().int().positive().max(2000).optional() }, (args) => request("POST", "/v1/files/search", args), { readOnlyHint: true });
+  register(server, "nas_file_tail", "Read a bounded tail from a text file.", { path: z.string().min(1), lines: z.number().int().positive().max(2000).optional(), max_bytes: z.number().int().positive().optional() }, (args) => request("POST", "/v1/files/tail", args), { readOnlyHint: true });
+  register(server, "nas_file_du", "Calculate recursive apparent file bytes under a permitted path.", { path: z.string().min(1) }, (args) => request("POST", "/v1/files/du", args), { readOnlyHint: true });
+  register(server, "nas_file_checksum", "Calculate a SHA-256 checksum.", { path: z.string().min(1) }, (args) => request("POST", "/v1/files/checksum", args), { readOnlyHint: true });
+}

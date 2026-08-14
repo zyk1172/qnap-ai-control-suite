@@ -34,5 +34,8 @@ test("official MCP server negotiates and lists v1 tools", async () => {
   assert.ok(names.includes("nas_disks"));
   assert.ok(names.includes("nas_users"));
   assert.ok(names.includes("nas_log_tail"));
+  assert.ok(names.includes("nas_network_manage"));
+  assert.ok(names.includes("nas_ups"));
+  assert.ok(names.includes("nas_job_get"));
   assert.ok(messages[1].result.tools.every((tool) => tool.outputSchema));
 });
