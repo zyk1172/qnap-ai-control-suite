@@ -26,7 +26,7 @@ test("official MCP server negotiates and lists v1 tools", async () => {
   child.kill("SIGTERM");
   await once(child, "exit");
   const messages = lines.slice(0, 2).map(JSON.parse);
-  assert.equal(messages[0].result.serverInfo.version, "1.0.4");
+  assert.equal(messages[0].result.serverInfo.version, "1.0.5");
   const names = messages[1].result.tools.map((tool) => tool.name);
   assert.ok(names.includes("nas_exec"));
   assert.ok(names.includes("nas_file_read"));

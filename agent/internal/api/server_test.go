@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -174,6 +175,37 @@ func TestSnapshotCapabilityEndpointIsStructured(t *testing.T) {
 	s, token := testServer(t)
 	w := request(t, s, token, http.MethodGet, "/v1/storage/snapshots/capabilities", "")
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"supported"`) {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestLogTailAcceptsRFC3339Window(t *testing.T) {
+	s, token := testServer(t)
+	if err := os.WriteFile(s.Config.Audit.Path, []byte(`{"ts":"2026-08-14T01:00:00Z","action":"match"}`+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	w := request(t, s, token, http.MethodPost, "/v1/logs/tail", `{"name":"audit","since":"2026-08-14T00:00:00Z","until":"2026-08-14T02:00:00Z"}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"time_filtered":true`) || !strings.Contains(w.Body.String(), "match") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, s, token, http.MethodPost, "/v1/logs/tail", `{"name":"audit","since":"invalid"}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "RFC3339") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestConfiguredEcosystemAdapterDryRun(t *testing.T) {
+	s, token := testServer(t)
+	s.Config.QNAPAdapters = map[string]config.QNAPAdapter{
+		"hbs3": {Commands: map[string][]string{"job_status": {"/bin/echo", "status", "{id}"}}},
+	}
+	s.Ecosystem.Adapters = s.Config.QNAPAdapters
+	w := request(t, s, token, http.MethodPost, "/v1/qnap/hbs/action", `{"action":"job_status","id":"backup-1","dry_run":true}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"argv":["/bin/echo","status","backup-1"]`) || !strings.Contains(w.Body.String(), `"adapter":"hbs3"`) {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, s, token, http.MethodPost, "/v1/qnap/vm/action", `{"action":"list","dry_run":true}`)
+	if w.Code != http.StatusNotImplemented || !strings.Contains(w.Body.String(), "adapter_unavailable") {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
 }

@@ -55,6 +55,7 @@ func (m *Manager) Start(kind string, fn func(context.Context, func(string)) (any
 	job := &Job{ID: id, Kind: kind, Status: Queued, CreatedAt: time.Now().UTC(), cancel: cancel}
 	m.jobs[id] = job
 	m.trimLocked()
+	snapshot := clone(*job)
 	m.mu.Unlock()
 	go func() {
 		m.mu.Lock()
@@ -88,7 +89,7 @@ func (m *Manager) Start(kind string, fn func(context.Context, func(string)) (any
 			job.ExitCode = &exitCode
 		}
 	}()
-	return clone(*job)
+	return snapshot
 }
 func (m *Manager) Get(id string) (Job, bool) {
 	m.mu.RLock()

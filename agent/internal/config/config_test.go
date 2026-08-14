@@ -54,3 +54,29 @@ func TestNormalizeKeepsCustomDockerPathAndAddsNewDefaults(t *testing.T) {
 		t.Fatalf("new Container Station default missing: %#v", cfg.DockerPaths)
 	}
 }
+
+func TestNormalizeAcceptsVerifiedQNAPAdapter(t *testing.T) {
+	cfg, err := Normalize(Config{
+		Auth:        Auth{TokenSHA256: "abc"},
+		Permissions: Permissions{AllowedRoots: []string{"/share"}},
+		QNAPAdapters: map[string]QNAPAdapter{
+			"hbs3": {Commands: map[string][]string{"job_status": {"/share/CACHEDEV1_DATA/.qpkg/HBS3/bin/hbs", "status", "{id}"}}},
+		},
+	})
+	if err != nil || len(cfg.QNAPAdapters["hbs3"].Commands) != 1 {
+		t.Fatalf("adapter normalization failed: %#v, %v", cfg.QNAPAdapters, err)
+	}
+}
+
+func TestNormalizeRejectsRelativeQNAPAdapterBinary(t *testing.T) {
+	_, err := Normalize(Config{
+		Auth:        Auth{TokenSHA256: "abc"},
+		Permissions: Permissions{AllowedRoots: []string{"/share"}},
+		QNAPAdapters: map[string]QNAPAdapter{
+			"hbs3": {Commands: map[string][]string{"job_list": {"hbs", "list"}}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected relative adapter command rejection")
+	}
+}

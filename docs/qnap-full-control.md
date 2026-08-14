@@ -20,7 +20,7 @@
 - Docker：`nas_docker_containers`、`nas_docker_command` 与各兼容细分工具。
 - QPKG：`nas_qpkg_list`、`nas_qpkg_manage`。支持 `start`、`stop`、`restart`、`enable`、`disable`、`status`、`download`、`cancel`、`remove`、`install_file`、`install_url`、`update_all`、`clean` 和 `add`。`restart` 会执行 QTS 支持的 stop/start 两条命令；`dry_run` 返回实际 argv，不执行变更。`async: true` 适用于下载、安装、移除和更新，返回 Job；完成时会重新读取 QPKG inventory。
 - Discovery：`nas_discovery` 显示 QTS/QuTS hero、工具链和 adapter capability 状态。
-- Ecosystem：`nas_qnap_ecosystem` 显示 QKVM/Virtualization Station、HBS、iSCSI、certificate 与 UPS 适配器状态；`nas_ups` 在 NUT `upsc` 可用时返回实际 UPS inventory、battery、runtime、input 和 status 值。
+- Ecosystem：`nas_qnap_ecosystem` 显示 QKVM/Virtualization Station、HBS、iSCSI、certificate 与 UPS 适配器状态；`nas_ups` 在 NUT `upsc` 可用时返回实际 UPS inventory、battery、runtime、input 和 status 值。对于已通过真机 probe 验证的私有命令，可在 `qnap_adapters` 配置后使用 `nas_vm_action`、`nas_hbs_action`、`nas_iscsi_action` 与 `nas_certificate_action`；见 [ecosystem-adapters.md](ecosystem-adapters.md)。
 - Accounts and shares：`nas_users`、`nas_user_manage`、`nas_groups`、`nas_group_manage`、`nas_share_list`、`nas_acl_get`、`nas_acl_set`。只有经 runtime probe 验证存在的系统工具会执行写操作。
 
 `observe`、`operate`、`admin` profile 仍可用于受限部署。它们保留 `allowed_roots`、命令列表、secret redaction 与 confirmation 模式。设置变更后重启 QPKG。

@@ -84,7 +84,7 @@ type requestContext struct {
 func New(cfg config.Config) *Server {
 	executor := qexec.Executor{DefaultTimeout: cfg.Timeout(), MaxOutput: cfg.Command.MaxOutputBytes}
 	host, _ := os.Hostname()
-	return &Server{Config: cfg, Exec: executor, Files: files.Service{Roots: cfg.Permissions.AllowedRoots, MaxInlineBytes: cfg.Files.MaxInlineBytes}, Jobs: jobs.New(cfg.Jobs.MaxHistory), Audit: &audit.Logger{Enabled: cfg.Audit.Enabled, Path: cfg.Audit.Path}, Docker: docker.Service{Exec: executor, Paths: cfg.DockerPaths, RedactSecrets: cfg.Privacy.RedactSecrets}, QPKG: qpkg.Service{Exec: executor}, Discovery: discovery.Service{Exec: executor}, System: qsystem.Service{Exec: executor}, Network: qnetwork.Service{Exec: executor}, Storage: storage.Service{Exec: executor}, Users: users.Service{Exec: executor}, Shares: shares.Service{Exec: executor}, Logs: logs.Service{AuditPath: cfg.Audit.Path, ServicePath: "/var/log/qnap-ai-control-agent/service.log"}, Ecosystem: ecosystem.Service{Discovery: discovery.Service{Exec: executor}, Exec: executor}, started: time.Now(), hostname: host}
+	return &Server{Config: cfg, Exec: executor, Files: files.Service{Roots: cfg.Permissions.AllowedRoots, MaxInlineBytes: cfg.Files.MaxInlineBytes}, Jobs: jobs.New(cfg.Jobs.MaxHistory), Audit: &audit.Logger{Enabled: cfg.Audit.Enabled, Path: cfg.Audit.Path}, Docker: docker.Service{Exec: executor, Paths: cfg.DockerPaths, RedactSecrets: cfg.Privacy.RedactSecrets}, QPKG: qpkg.Service{Exec: executor}, Discovery: discovery.Service{Exec: executor}, System: qsystem.Service{Exec: executor}, Network: qnetwork.Service{Exec: executor}, Storage: storage.Service{Exec: executor}, Users: users.Service{Exec: executor}, Shares: shares.Service{Exec: executor}, Logs: logs.Service{AuditPath: cfg.Audit.Path, ServicePath: "/var/log/qnap-ai-control-agent/service.log"}, Ecosystem: ecosystem.Service{Discovery: discovery.Service{Exec: executor}, Exec: executor, Adapters: cfg.QNAPAdapters}, started: time.Now(), hostname: host}
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -199,6 +199,14 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request) {
 		s.ecosystem(w, r)
 	case "/v1/qnap/ups":
 		s.ups(w, r)
+	case "/v1/qnap/vm/action":
+		s.ecosystemCommand(w, r, "virtualization_station")
+	case "/v1/qnap/hbs/action":
+		s.ecosystemCommand(w, r, "hbs3")
+	case "/v1/qnap/iscsi/action":
+		s.ecosystemCommand(w, r, "iscsi")
+	case "/v1/qnap/certificates/action":
+		s.ecosystemCommand(w, r, "certificates")
 	case "/v1/files/list":
 		s.fileList(w, r)
 	case "/v1/files/stat":
@@ -1213,12 +1221,12 @@ func (s *Server) qpkgManage(w http.ResponseWriter, r *http.Request) {
 	s.respondCommand(w, r, result, err)
 }
 func (s *Server) auditTail(w http.ResponseWriter, r *http.Request) {
-	lines, err := logs.TailPath(s.Config.Audit.Path, 200)
+	page, err := s.logPage(r, "audit", 200, 0, "", "", "")
 	if err != nil {
 		s.fail(w, r, 500, "audit_read_failed", err.Error(), nil)
 		return
 	}
-	s.ok(w, r, map[string]any{"lines": lines})
+	s.ok(w, r, page)
 }
 func (s *Server) logSources(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r, map[string]any{"sources": s.Logs.Sources()})
@@ -1229,21 +1237,48 @@ func (s *Server) logTail(w http.ResponseWriter, r *http.Request) {
 		Limit  int    `json:"limit"`
 		Cursor int    `json:"cursor"`
 		Query  string `json:"query"`
+		Since  string `json:"since"`
+		Until  string `json:"until"`
 	}
 	if r.Method == http.MethodGet {
 		req.Name = r.URL.Query().Get("name")
 		req.Limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
 		req.Cursor, _ = strconv.Atoi(r.URL.Query().Get("cursor"))
 		req.Query = r.URL.Query().Get("query")
+		req.Since = r.URL.Query().Get("since")
+		req.Until = r.URL.Query().Get("until")
 	} else if !decode(w, r, &req) {
 		return
 	}
-	page, err := s.Logs.Page(req.Name, req.Limit, req.Cursor, req.Query)
+	page, err := s.logPage(r, req.Name, req.Limit, req.Cursor, req.Query, req.Since, req.Until)
 	if err != nil {
 		s.fail(w, r, 400, "log_tail_failed", err.Error(), nil)
 		return
 	}
-	s.ok(w, r, map[string]any{"name": req.Name, "query": req.Query, "lines": page.Lines, "next_cursor": page.NextCursor, "total": page.Total})
+	s.ok(w, r, map[string]any{"name": req.Name, "query": req.Query, "since": req.Since, "until": req.Until, "lines": page.Lines, "next_cursor": page.NextCursor, "total": page.Total, "time_filtered": page.TimeFiltered, "unparseable_lines": page.UnparseableLines})
+}
+
+func (s *Server) logPage(_ *http.Request, name string, limit, cursor int, query, sinceText, untilText string) (logs.Page, error) {
+	since, err := parseLogTime(sinceText)
+	if err != nil {
+		return logs.Page{}, err
+	}
+	until, err := parseLogTime(untilText)
+	if err != nil {
+		return logs.Page{}, err
+	}
+	return s.Logs.Page(name, limit, cursor, query, since, until)
+}
+
+func parseLogTime(value string) (time.Time, error) {
+	if strings.TrimSpace(value) == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, errors.New("since and until must be RFC3339 timestamps")
+	}
+	return parsed.UTC(), nil
 }
 func (s *Server) ecosystem(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r, map[string]any{"adapters": s.Ecosystem.Inventory(r.Context())})
@@ -1255,6 +1290,63 @@ func (s *Server) ups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.ok(w, r, item)
+}
+func (s *Server) ecosystemCommand(w http.ResponseWriter, r *http.Request, adapter string) {
+	if r.Method != http.MethodPost {
+		s.fail(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "POST required", nil)
+		return
+	}
+	var req struct {
+		Action     string   `json:"action"`
+		ID         string   `json:"id"`
+		Name       string   `json:"name"`
+		Target     string   `json:"target"`
+		Args       []string `json:"args"`
+		TimeoutSec int      `json:"timeout_sec"`
+		Async      bool     `json:"async"`
+		DryRun     bool     `json:"dry_run"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	argv, configuredTimeout, err := s.Ecosystem.Command(adapter, req.Action, map[string]string{"id": req.ID, "name": req.Name, "target": req.Target}, req.Args)
+	if err != nil {
+		s.fail(w, r, http.StatusNotImplemented, "adapter_unavailable", err.Error(), nil)
+		return
+	}
+	if !s.Config.Permissions.AllowAnyCommand && !allowed(argv[0], s.Config.Permissions.AllowedCommands) {
+		s.fail(w, r, http.StatusForbidden, "forbidden", "configured adapter executable is not permitted by active profile", map[string]any{"adapter": adapter, "action": req.Action})
+		return
+	}
+	timeout := configuredTimeout
+	if req.TimeoutSec > 0 {
+		timeout = time.Duration(req.TimeoutSec) * time.Second
+	}
+	if timeout <= 0 {
+		timeout = s.Config.Timeout()
+	}
+	if req.DryRun {
+		s.ok(w, r, map[string]any{"adapter": adapter, "action": req.Action, "argv": argv, "timeout_seconds": int(timeout.Seconds()), "dry_run": true})
+		return
+	}
+	command := qexec.Request{Argv: argv, Timeout: timeout, MaxOutput: s.Config.Command.MaxOutputBytes}
+	if req.Async {
+		job := s.Jobs.Start("qnap."+adapter+"."+req.Action, func(ctx context.Context, log func(string)) (any, error) {
+			result, err := s.Exec.Run(ctx, command)
+			if result.Stdout != "" {
+				log(result.Stdout)
+			}
+			if result.Stderr != "" {
+				log(result.Stderr)
+			}
+			return result, err
+		})
+		s.audit(r, "qnap."+adapter+"."+req.Action, "queued", map[string]any{"argv": argv}, 0, "")
+		s.ok(w, r, job)
+		return
+	}
+	result, err := s.run(r, argv, command)
+	s.respondCommand(w, r, result, err)
 }
 func (s *Server) respondCommand(w http.ResponseWriter, r *http.Request, result qexec.Result, err error) {
 	if err == nil {

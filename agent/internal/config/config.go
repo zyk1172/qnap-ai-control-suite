@@ -41,6 +41,14 @@ type Files struct {
 type Jobs struct {
 	MaxHistory int `json:"max_history"`
 }
+
+// QNAPAdapter binds a verified, NAS-local argv template to a named ecosystem
+// adapter. Templates may use {id}, {name}, {target}, and {args}; they are
+// expanded as argv entries and are never evaluated by a shell.
+type QNAPAdapter struct {
+	Commands       map[string][]string `json:"commands"`
+	TimeoutSeconds int                 `json:"timeout_seconds,omitempty"`
+}
 type Audit struct {
 	Enabled       bool   `json:"enabled"`
 	Path          string `json:"path"`
@@ -48,18 +56,19 @@ type Audit struct {
 }
 
 type Config struct {
-	Version      int          `json:"version"`
-	Listen       string       `json:"listen"`
-	Auth         Auth         `json:"auth"`
-	Profile      string       `json:"profile"`
-	Permissions  Permissions  `json:"permissions"`
-	Privacy      Privacy      `json:"privacy"`
-	Confirmation Confirmation `json:"confirmation"`
-	Command      Command      `json:"command"`
-	Files        Files        `json:"files"`
-	Jobs         Jobs         `json:"jobs"`
-	Audit        Audit        `json:"audit"`
-	DockerPaths  []string     `json:"docker_paths,omitempty"`
+	Version      int                    `json:"version"`
+	Listen       string                 `json:"listen"`
+	Auth         Auth                   `json:"auth"`
+	Profile      string                 `json:"profile"`
+	Permissions  Permissions            `json:"permissions"`
+	Privacy      Privacy                `json:"privacy"`
+	Confirmation Confirmation           `json:"confirmation"`
+	Command      Command                `json:"command"`
+	Files        Files                  `json:"files"`
+	Jobs         Jobs                   `json:"jobs"`
+	Audit        Audit                  `json:"audit"`
+	DockerPaths  []string               `json:"docker_paths,omitempty"`
+	QNAPAdapters map[string]QNAPAdapter `json:"qnap_adapters,omitempty"`
 }
 
 type legacyConfig struct {
@@ -83,8 +92,9 @@ func Defaults() Config {
 		Confirmation: Confirmation{Mode: "destructive_only", TTLSeconds: 600},
 		Command:      Command{TimeoutSeconds: 30, MaxOutputBytes: 8 * 1024 * 1024},
 		Files:        Files{MaxInlineBytes: 4 * 1024 * 1024}, Jobs: Jobs{MaxHistory: 200},
-		Audit:       Audit{Enabled: true, Path: "/var/log/qnap-ai-control-agent/audit.jsonl"},
-		DockerPaths: defaultDockerPaths(),
+		Audit:        Audit{Enabled: true, Path: "/var/log/qnap-ai-control-agent/audit.jsonl"},
+		DockerPaths:  defaultDockerPaths(),
+		QNAPAdapters: map[string]QNAPAdapter{},
 	}
 }
 
@@ -195,6 +205,27 @@ func Normalize(cfg Config) (Config, error) {
 	// on upgrades. Existing configs would otherwise never discover a wrapper
 	// introduced in a later agent version.
 	cfg.DockerPaths = cleanPaths(append(cfg.DockerPaths, defaults.DockerPaths...))
+	if cfg.QNAPAdapters == nil {
+		cfg.QNAPAdapters = map[string]QNAPAdapter{}
+	}
+	for name, adapter := range cfg.QNAPAdapters {
+		if !validAdapterName(name) {
+			return cfg, errors.New("qnap_adapters has unsupported adapter: " + name)
+		}
+		if adapter.TimeoutSeconds < 0 {
+			return cfg, errors.New("qnap_adapters timeout_seconds must not be negative")
+		}
+		for action, argv := range adapter.Commands {
+			if strings.TrimSpace(action) == "" || len(argv) == 0 || !filepath.IsAbs(argv[0]) {
+				return cfg, errors.New("qnap_adapters commands require an action and absolute executable path")
+			}
+			for _, value := range argv {
+				if value == "" {
+					return cfg, errors.New("qnap_adapters command arguments must not be empty")
+				}
+			}
+		}
+	}
 	return cfg, nil
 }
 
@@ -230,6 +261,14 @@ func cleanPaths(paths []string) []string {
 	return out
 }
 func boolPtr(v bool) *bool { return &v }
+func validAdapterName(name string) bool {
+	switch name {
+	case "virtualization_station", "hbs3", "iscsi", "certificates":
+		return true
+	default:
+		return false
+	}
+}
 func defaultDockerPaths() []string {
 	paths := []string{}
 	for i := 1; i <= 8; i++ {

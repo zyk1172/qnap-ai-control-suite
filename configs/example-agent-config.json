@@ -19,5 +19,6 @@
     "/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker",
     "/share/CACHEDEV5_DATA/.qpkg/container-station/bin/docker",
     "/usr/bin/docker"
-  ]
+  ],
+  "qnap_adapters": {}
 }
