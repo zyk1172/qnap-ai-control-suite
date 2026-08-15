@@ -21,7 +21,7 @@ v1.0.16 将旧版受限 NAS API 包装器升级为可信局域网内的 QNAP 本
 
 ## 与旧版的差异
 
-| 范围 | v0.3.2 | v1.0.15 |
+| 范围 | v0.3.2 | v1.0.16 |
 | --- | --- | --- |
 | 系统命令 | 7 个 allowlist executable，禁止 shell | 任意 argv、shell pipeline、cwd/env/stdin；可区分失败、超时和输出截断 |
 | 文件 | 仅 `/share`，文本导向 | 根文件系统、base64 二进制 range I/O、目录/权限/归档/校验和 |
@@ -29,7 +29,7 @@ v1.0.16 将旧版受限 NAS API 包装器升级为可信局域网内的 QNAP 本
 | QPKG | 基础列表与动作 | 已验证的 QTS 参数、安装/移除/更新、运行 PID 和异步操作跟踪 |
 | NAS 管理 | 概览、进程、温度 | 存储、RAID/SMART、网络、用户/组、共享/ACL/NFS、日志、UPS、服务和电源 |
 
-完整逐项对比、真机验证范围及未声明支持的边界见 [v0.3 到 v1.0.15 对比](docs/v0.3-v1.0.15-comparison.md)。
+完整逐项对比、真机验证范围及未声明支持的边界见 [v0.3 到 v1.0.16 对比](docs/v0.3-v1.0.15-comparison.md)。
 
 ## 安装
 
@@ -81,4 +81,4 @@ WebUI 只在当前页面输入状态保存 token；仪表盘显示 profile、平
 - [网络](docs/network.md)
 - [架构](docs/architecture.md)
 - [v1 审计](docs/v1-audit.md)
-- [v0.3 到 v1.0.15 对比](docs/v0.3-v1.0.15-comparison.md)
+- [v0.3 到 v1.0.16 对比](docs/v0.3-v1.0.15-comparison.md)
