@@ -49,6 +49,11 @@ func (s Service) Inventory(ctx context.Context) []Adapter {
 		s.adapter("iscsi", d.Features["iscsi"].Supported, "configure verified iSCSI/LUN commands from a NAS runtime probe", []string{"targets", "luns", "mapping", "status", "snapshots", "online", "offline", "expand", "clone"}),
 		s.adapter("certificates", true, "configure verified certificate commands from a NAS runtime probe", []string{"list", "current", "expiry", "issuer", "subject", "san", "import", "replace"}),
 		s.adapter("shares", sharesInstalled, "SMB/NFS configuration found; configure verified QNAP shared-folder commands from a NAS runtime probe", []string{"create", "delete", "rename", "set_path", "quota", "hidden", "recycle_bin", "nfs_export"}),
+		s.adapter("virtual_switch", d.Features["virtual_switch"].Supported, "QTS Virtual Switch private API differs by firmware; configure commands from a NAS runtime probe", []string{"list", "info", "create", "delete", "configure", "vlan", "bond", "bridge"}),
+		s.adapter("system_settings", d.Platform == "qts" || d.Platform == "quts_hero", "QTS persistent system settings require verified local commands", []string{"info", "hostname", "timezone", "ntp", "service"}),
+		s.adapter("firmware", d.Platform == "qts" || d.Platform == "quts_hero", "QTS firmware utilities require a runtime-probed command adapter", []string{"info", "check", "download", "install"}),
+		s.adapter("notifications", d.Platform == "qts" || d.Platform == "quts_hero", "QTS notification center commands require a runtime-probed command adapter", []string{"list", "history", "test", "configure"}),
+		s.adapter("storage_manager", d.Platform == "qts" || d.Platform == "quts_hero", "QTS storage manager commands require a runtime-probed command adapter", []string{"pools", "volumes", "snapshots", "create", "delete", "expand", "restore", "schedule"}),
 		{Name: "ups", Installed: d.Features["ups"].Supported, Supported: d.Features["ups"].Supported, Reason: d.Features["ups"].Reason, Capabilities: []string{"state", "battery", "runtime", "input", "configuration"}},
 	}
 }

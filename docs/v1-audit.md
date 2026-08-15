@@ -1,6 +1,6 @@
 # v1 审计
 
-审计基线为 `v0.3.2`。仓库包含单体 Go handler、手写 MCP JSON-RPC、QPKG shell service、文档和打包脚本。
+审计基线为 `v0.3.2`。仓库当时包含单体 Go handler、手写 MCP JSON-RPC、QPKG shell service、文档和打包脚本。面向使用者的当前能力清单见 [v0.3 到 v1.0.16 对比](v0.3-v1.0.15-comparison.md)。
 
 ## 原有能力
 

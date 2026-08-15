@@ -65,6 +65,7 @@ mkdir -p "$BUILD_DIR/shared/bin" "$ROOT/dist"
 
 GOOS=linux GOARCH="$ARCH" "$ROOT/scripts/build_agent.sh"
 cp "$ROOT/dist/linux-$ARCH/qnap-ai-control-agent" "$BUILD_DIR/shared/bin/"
+cp "$ROOT/scripts/qnap_probe.sh" "$BUILD_DIR/shared/bin/qnap-ai-control-probe"
 cp "$ROOT/qpkg/qpkg.cfg" "$BUILD_DIR/"
 perl -0pi -e "s/__VERSION__/$VERSION/g" "$BUILD_DIR/qpkg.cfg"
 cp "$ROOT/qpkg/shared/qnap-ai-control-agent.sh" "$BUILD_DIR/shared/"
@@ -79,7 +80,7 @@ elif [ -f "$QDK_DIR/template/package_routines" ]; then
 else
   touch "$BUILD_DIR/package_routines"
 fi
-chmod +x "$BUILD_DIR/shared/bin/qnap-ai-control-agent" "$BUILD_DIR/shared/qnap-ai-control-agent.sh"
+chmod +x "$BUILD_DIR/shared/bin/qnap-ai-control-agent" "$BUILD_DIR/shared/bin/qnap-ai-control-probe" "$BUILD_DIR/shared/qnap-ai-control-agent.sh"
 
 if command -v xattr >/dev/null 2>&1; then
   xattr -cr "$BUILD_DIR" 2>/dev/null || true

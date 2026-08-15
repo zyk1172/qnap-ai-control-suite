@@ -54,6 +54,7 @@ type Server struct {
 	Shares    shares.Service
 	Logs      logs.Service
 	Ecosystem ecosystem.Service
+	ProbePath string
 	started   time.Time
 	hostname  string
 }
@@ -84,7 +85,15 @@ type requestContext struct {
 func New(cfg config.Config) *Server {
 	executor := qexec.Executor{DefaultTimeout: cfg.Timeout(), MaxOutput: cfg.Command.MaxOutputBytes}
 	host, _ := os.Hostname()
-	return &Server{Config: cfg, Exec: executor, Files: files.Service{Roots: cfg.Permissions.AllowedRoots, MaxInlineBytes: cfg.Files.MaxInlineBytes}, Jobs: jobs.New(cfg.Jobs.MaxHistory), Audit: &audit.Logger{Enabled: cfg.Audit.Enabled, Path: cfg.Audit.Path}, Docker: docker.Service{Exec: executor, Paths: cfg.DockerPaths, RedactSecrets: cfg.Privacy.RedactSecrets}, QPKG: qpkg.Service{Exec: executor}, Discovery: discovery.Service{Exec: executor}, System: qsystem.Service{Exec: executor}, Network: qnetwork.Service{Exec: executor}, Storage: storage.Service{Exec: executor}, Users: users.Service{Exec: executor}, Shares: shares.Service{Exec: executor}, Logs: logs.Service{AuditPath: cfg.Audit.Path, ServicePath: "/var/log/qnap-ai-control-agent/service.log"}, Ecosystem: ecosystem.Service{Discovery: discovery.Service{Exec: executor}, Exec: executor, Adapters: cfg.QNAPAdapters}, started: time.Now(), hostname: host}
+	return &Server{Config: cfg, Exec: executor, Files: files.Service{Roots: cfg.Permissions.AllowedRoots, MaxInlineBytes: cfg.Files.MaxInlineBytes}, Jobs: jobs.New(cfg.Jobs.MaxHistory), Audit: &audit.Logger{Enabled: cfg.Audit.Enabled, Path: cfg.Audit.Path}, Docker: docker.Service{Exec: executor, Paths: cfg.DockerPaths, RedactSecrets: cfg.Privacy.RedactSecrets}, QPKG: qpkg.Service{Exec: executor}, Discovery: discovery.Service{Exec: executor}, System: qsystem.Service{Exec: executor}, Network: qnetwork.Service{Exec: executor}, Storage: storage.Service{Exec: executor}, Users: users.Service{Exec: executor}, Shares: shares.Service{Exec: executor}, Logs: logs.Service{AuditPath: cfg.Audit.Path, ServicePath: "/var/log/qnap-ai-control-agent/service.log"}, Ecosystem: ecosystem.Service{Discovery: discovery.Service{Exec: executor}, Exec: executor, Adapters: cfg.QNAPAdapters}, ProbePath: defaultProbePath(), started: time.Now(), hostname: host}
+}
+
+func defaultProbePath() string {
+	binary, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(binary), "qnap-ai-control-probe")
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -155,6 +164,8 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request) {
 		s.capabilities(w, r)
 	case "/v1/qnap/discovery":
 		s.discovery(w, r)
+	case "/v1/qnap/probe":
+		s.qnapProbe(w, r)
 	case "/v1/system/overview":
 		s.systemOverview(w, r)
 	case "/v1/system/info":
@@ -211,6 +222,16 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request) {
 		s.ecosystemCommand(w, r, "iscsi")
 	case "/v1/qnap/certificates/action":
 		s.ecosystemCommand(w, r, "certificates")
+	case "/v1/qnap/virtual-switch/action":
+		s.ecosystemCommand(w, r, "virtual_switch")
+	case "/v1/qnap/system-settings/action":
+		s.ecosystemCommand(w, r, "system_settings")
+	case "/v1/qnap/firmware/action":
+		s.ecosystemCommand(w, r, "firmware")
+	case "/v1/qnap/notifications/action":
+		s.ecosystemCommand(w, r, "notifications")
+	case "/v1/qnap/storage/action":
+		s.ecosystemCommand(w, r, "storage_manager")
 	case "/v1/qnap/certificates/inspect":
 		s.certificateInspect(w, r)
 	case "/v1/files/list":
@@ -282,6 +303,43 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r, s.Discovery.Discover(r.Context()))
+}
+func (s *Server) qnapProbe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.fail(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "POST required", nil)
+		return
+	}
+	if s.Config.Profile != "full_trust" {
+		s.fail(w, r, http.StatusForbidden, "forbidden", "QNAP probe requires full_trust", nil)
+		return
+	}
+	var req struct {
+		OutputPath string `json:"output_path"`
+		DryRun     bool   `json:"dry_run"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if !filepath.IsAbs(req.OutputPath) || strings.ContainsRune(req.OutputPath, 0) {
+		s.fail(w, r, http.StatusBadRequest, "invalid_request", "output_path must be an absolute path", nil)
+		return
+	}
+	if s.ProbePath == "" {
+		s.fail(w, r, http.StatusServiceUnavailable, "qnap_probe_unavailable", "QPKG probe script path could not be determined", nil)
+		return
+	}
+	if !req.DryRun {
+		info, err := os.Stat(s.ProbePath)
+		if err != nil || info.IsDir() || info.Mode()&0111 == 0 {
+			s.fail(w, r, http.StatusServiceUnavailable, "qnap_probe_unavailable", "QPKG probe script is not installed", nil)
+			return
+		}
+	}
+	result, err := s.run(r, []string{s.ProbePath, req.OutputPath}, qexec.Request{Timeout: 90 * time.Second, DryRun: req.DryRun})
+	if err == nil {
+		s.audit(r, "qnap.probe", "success", map[string]any{"output_path": req.OutputPath, "dry_run": req.DryRun}, result.DurationMS, "")
+	}
+	s.respondCommand(w, r, result, err)
 }
 func (s *Server) systemOverview(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"host": s.hostname, "os": runtime.GOOS, "arch": runtime.GOARCH, "started_at": s.started.UTC()}
@@ -556,6 +614,13 @@ func (s *Server) storageRoute(w http.ResponseWriter, r *http.Request) bool {
 		}
 		return true
 	}
+	if strings.HasPrefix(path, "raid-groups/") {
+		parts := strings.Split(path, "/")
+		if len(parts) == 3 && parts[2] == "action" {
+			s.raidAction(w, r, parts[1])
+			return true
+		}
+	}
 	if path == "pools" {
 		items, err := s.Storage.Pools(r.Context())
 		if err != nil {
@@ -652,6 +717,35 @@ func (s *Server) storageRoute(w http.ResponseWriter, r *http.Request) bool {
 	}
 	return false
 }
+
+func (s *Server) raidAction(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodPost {
+		s.fail(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "POST required", nil)
+		return
+	}
+	if s.Config.Profile != "full_trust" {
+		s.fail(w, r, http.StatusForbidden, "forbidden", "RAID scrub actions require full_trust", nil)
+		return
+	}
+	var req struct {
+		Action string `json:"action"`
+		DryRun bool   `json:"dry_run"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	result, err := s.Storage.RAIDAction(name, req.Action, req.DryRun)
+	if err != nil {
+		s.fail(w, r, http.StatusUnprocessableEntity, "raid_action_failed", err.Error(), nil)
+		return
+	}
+	if !req.DryRun && !result.Applied {
+		s.fail(w, r, http.StatusConflict, "raid_action_not_applied", "mdraid did not report the requested sync action", result)
+		return
+	}
+	s.audit(r, "storage.raid."+req.Action, "success", result, 0, "")
+	s.ok(w, r, result)
+}
 func (s *Server) userRoute(w http.ResponseWriter, r *http.Request) bool {
 	switch r.URL.Path {
 	case "/v1/users":
@@ -726,7 +820,11 @@ func (s *Server) shareRoute(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		result, err := s.Shares.ACL(r.Context(), req.Path)
-		s.respondCommand(w, r, result, err)
+		if err != nil {
+			s.respondCommand(w, r, qexec.Result{}, err)
+			return true
+		}
+		s.ok(w, r, result)
 		return true
 	case "/v1/acl/set":
 		var req struct {
@@ -841,7 +939,7 @@ func (s *Server) run(r *http.Request, argv []string, req qexec.Request) (qexec.R
 	if req.Timeout <= 0 {
 		req.Timeout = s.Config.Timeout()
 	}
-	if req.MaxOutput <= 0 {
+	if req.MaxOutput <= 0 || req.MaxOutput > s.Config.Command.MaxOutputBytes {
 		req.MaxOutput = s.Config.Command.MaxOutputBytes
 	}
 	return s.Exec.Run(r.Context(), req)
@@ -1046,10 +1144,15 @@ func (s *Server) jobListOrStart(w http.ResponseWriter, r *http.Request) {
 		s.ok(w, r, map[string]any{"jobs": s.Jobs.List()})
 		return
 	}
+	if r.Method != http.MethodPost {
+		s.fail(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "GET or POST required", nil)
+		return
+	}
 	var req struct {
 		Kind    string      `json:"kind"`
 		Command execRequest `json:"command"`
 		Shell   string      `json:"shell"`
+		Script  string      `json:"script"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -1057,43 +1160,72 @@ func (s *Server) jobListOrStart(w http.ResponseWriter, r *http.Request) {
 	if req.Kind == "" {
 		req.Kind = "exec"
 	}
-	if req.Shell != "" {
+	script := req.Script
+	shellPath := req.Shell
+	if script == "" && shellPath != "" {
+		// Keep the existing shell-as-script body compatible with earlier API
+		// clients while accepting the explicit shell + script form.
+		script, shellPath = shellPath, ""
+	}
+	if script != "" {
 		if !s.Config.Permissions.AllowShell {
 			s.fail(w, r, 403, "shell_disabled", "shell execution is disabled", nil)
 			return
 		}
-		req.Command.Argv = []string{"/bin/sh", "-c", req.Shell}
+		if shellPath == "" {
+			shellPath = detectShell()
+		}
+		if !validShell(shellPath) {
+			s.fail(w, r, http.StatusServiceUnavailable, "shell_unavailable", "no executable shell was found", nil)
+			return
+		}
+		req.Command.Argv = []string{shellPath, "-c", script}
 	}
 	if len(req.Command.Argv) == 0 {
 		s.fail(w, r, 400, "invalid_request", "command.argv or shell is required", nil)
 		return
 	}
+	stdin := []byte(req.Command.Stdin)
+	var err error
+	if req.Command.StdinBase64 != "" {
+		stdin, err = decodeBase64(req.Command.StdinBase64)
+	} else {
+		err = nil
+	}
+	if err != nil {
+		s.fail(w, r, http.StatusBadRequest, "invalid_stdin_base64", err.Error(), nil)
+		return
+	}
 	job := s.Jobs.Start(req.Kind, func(ctx context.Context, log func(string)) (any, error) {
 		request := (&http.Request{}).WithContext(ctx)
-		result, err := s.run(request, req.Command.Argv, qexec.Request{CWD: req.Command.CWD, Env: req.Command.Env, Timeout: time.Duration(req.Command.TimeoutSec) * time.Second, MaxOutput: req.Command.MaxOutput, DryRun: req.Command.DryRun})
-		log(result.Stdout)
-		log(result.Stderr)
+		result, err := s.run(request, req.Command.Argv, qexec.Request{CWD: req.Command.CWD, Env: req.Command.Env, Stdin: stdin, Timeout: time.Duration(req.Command.TimeoutSec) * time.Second, MaxOutput: req.Command.MaxOutput, DryRun: req.Command.DryRun})
+		if result.Stdout != "" {
+			log(result.Stdout)
+		}
+		if result.Stderr != "" {
+			log(result.Stderr)
+		}
 		return result, err
 	})
+	s.audit(r, "jobs.start", "queued", map[string]any{"kind": req.Kind, "argv": req.Command.Argv, "cwd": req.Command.CWD, "dry_run": req.Command.DryRun}, 0, "")
 	s.ok(w, r, job)
 }
 func (s *Server) jobByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/v1/jobs/")
 	if strings.HasSuffix(id, "/logs") {
 		id = strings.TrimSuffix(id, "/logs")
-		job, ok := s.Jobs.Get(id)
+		if r.Method != http.MethodGet {
+			s.fail(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "GET required", nil)
+			return
+		}
+		cursor, _ := strconv.Atoi(r.URL.Query().Get("cursor"))
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		lines, next, truncated, ok := s.Jobs.Logs(id, cursor, limit)
 		if !ok {
 			s.fail(w, r, 404, "not_found", "job not found", nil)
 			return
 		}
-		cursor, _ := strconv.Atoi(r.URL.Query().Get("cursor"))
-		if cursor < 0 {
-			cursor = 0
-		}
-		if cursor > len(job.Logs) {
-			cursor = len(job.Logs)
-		}
-		s.ok(w, r, map[string]any{"id": id, "lines": job.Logs[cursor:], "next_cursor": len(job.Logs)})
+		s.ok(w, r, map[string]any{"id": id, "lines": lines, "next_cursor": next, "logs_truncated": truncated})
 		return
 	}
 	if strings.HasSuffix(id, "/cancel") {

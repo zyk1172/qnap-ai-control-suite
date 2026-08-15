@@ -16,7 +16,7 @@ func TestMigratesLegacy032(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Version != 1 || cfg.Auth.TokenSHA256 != "abc" || cfg.Files.MaxInlineBytes != 1024 || cfg.Command.TimeoutSeconds != 9 {
+	if cfg.Version != 1 || cfg.Auth.TokenSHA256 != "abc" || cfg.Files.MaxInlineBytes != 1024 || cfg.Command.TimeoutSeconds != 9 || cfg.Profile != "full_trust" || !cfg.Permissions.AllowAnyCommand || !cfg.Permissions.AllowShell || cfg.Confirmation.Mode != "off" {
 		t.Fatalf("migration failed: %+v", cfg)
 	}
 }
@@ -60,11 +60,16 @@ func TestNormalizeAcceptsVerifiedQNAPAdapter(t *testing.T) {
 		Auth:        Auth{TokenSHA256: "abc"},
 		Permissions: Permissions{AllowedRoots: []string{"/share"}},
 		QNAPAdapters: map[string]QNAPAdapter{
-			"hbs3":   {Commands: map[string][]string{"job_status": {"/share/CACHEDEV1_DATA/.qpkg/HBS3/bin/hbs", "status", "{id}"}}},
-			"shares": {Commands: map[string][]string{"create": {"/share/CACHEDEV1_DATA/.qpkg/share-tool", "create", "{name}"}}},
+			"hbs3":            {Commands: map[string][]string{"job_status": {"/share/CACHEDEV1_DATA/.qpkg/HBS3/bin/hbs", "status", "{id}"}}},
+			"shares":          {Commands: map[string][]string{"create": {"/share/CACHEDEV1_DATA/.qpkg/share-tool", "create", "{name}"}}},
+			"virtual_switch":  {Commands: map[string][]string{"list": {"/share/CACHEDEV1_DATA/.qpkg/network/bin/switch", "list"}}},
+			"system_settings": {Commands: map[string][]string{"hostname": {"/share/CACHEDEV1_DATA/.qpkg/system/bin/settings", "hostname", "{name}"}}},
+			"firmware":        {Commands: map[string][]string{"info": {"/share/CACHEDEV1_DATA/.qpkg/firmware/bin/fw", "info"}}},
+			"notifications":   {Commands: map[string][]string{"test": {"/share/CACHEDEV1_DATA/.qpkg/notify/bin/notify", "test", "{target}"}}},
+			"storage_manager": {Commands: map[string][]string{"pools": {"/share/CACHEDEV1_DATA/.qpkg/storage/bin/manager", "pools"}}},
 		},
 	})
-	if err != nil || len(cfg.QNAPAdapters["hbs3"].Commands) != 1 || len(cfg.QNAPAdapters["shares"].Commands) != 1 {
+	if err != nil || len(cfg.QNAPAdapters["hbs3"].Commands) != 1 || len(cfg.QNAPAdapters["shares"].Commands) != 1 || len(cfg.QNAPAdapters["virtual_switch"].Commands) != 1 || len(cfg.QNAPAdapters["system_settings"].Commands) != 1 || len(cfg.QNAPAdapters["firmware"].Commands) != 1 || len(cfg.QNAPAdapters["notifications"].Commands) != 1 || len(cfg.QNAPAdapters["storage_manager"].Commands) != 1 {
 		t.Fatalf("adapter normalization failed: %#v, %v", cfg.QNAPAdapters, err)
 	}
 }

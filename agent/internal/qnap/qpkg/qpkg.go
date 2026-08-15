@@ -7,14 +7,16 @@ import (
 	"os"
 	"path/filepath"
 	qexec "qnap-ai-control-suite/agent/internal/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
 type Service struct {
-	Exec qexec.Executor
-	Path string
+	Exec     qexec.Executor
+	Path     string
+	ProcRoot string
 }
 type Inventory struct {
 	Packages []map[string]string `json:"packages"`
@@ -52,13 +54,65 @@ func (s Service) Inventory(ctx context.Context) (Inventory, error) {
 			if _, err := os.Stat(script); err == nil {
 				pkg["init_script"] = script
 			}
-			pkg["process_state"] = "runtime process verification requires QNAP probe"
+			pids, procErr := runningPIDs(root, s.procRoot())
+			if procErr != nil {
+				pkg["process_state"] = "unknown"
+				pkg["process_state_error"] = procErr.Error()
+			} else if len(pids) > 0 {
+				pkg["process_state"] = "running"
+				pkg["process_pids"] = strings.Join(pids, ",")
+			} else {
+				pkg["process_state"] = "stopped"
+			}
 		}
 		if value := pkg["Enable"]; value != "" {
 			pkg["enabled"] = strconv.FormatBool(strings.EqualFold(value, "TRUE"))
 		}
 	}
 	return out, nil
+}
+
+func (s Service) procRoot() string {
+	if s.ProcRoot != "" {
+		return s.ProcRoot
+	}
+	return "/proc"
+}
+
+func runningPIDs(installPath, procRoot string) ([]string, error) {
+	root := filepath.Clean(installPath)
+	entries, err := os.ReadDir(procRoot)
+	if err != nil {
+		return nil, err
+	}
+	pids := []string{}
+	for _, entry := range entries {
+		pid := entry.Name()
+		if !entry.IsDir() || !isPID(pid) {
+			continue
+		}
+		base := filepath.Join(procRoot, pid)
+		exe, _ := os.Readlink(filepath.Join(base, "exe"))
+		cmdline, _ := os.ReadFile(filepath.Join(base, "cmdline"))
+		if matchesInstallPath(root, exe) || matchesInstallPath(root, strings.ReplaceAll(string(cmdline), "\x00", " ")) {
+			pids = append(pids, pid)
+		}
+	}
+	sort.Slice(pids, func(i, j int) bool {
+		left, _ := strconv.Atoi(pids[i])
+		right, _ := strconv.Atoi(pids[j])
+		return left < right
+	})
+	return pids, nil
+}
+
+func isPID(value string) bool {
+	_, err := strconv.Atoi(value)
+	return err == nil
+}
+
+func matchesInstallPath(root, value string) bool {
+	return value == root || strings.Contains(value, root+string(os.PathSeparator))
 }
 func Parse(r interface{ Read([]byte) (int, error) }) []map[string]string {
 	scanner := bufio.NewScanner(r)

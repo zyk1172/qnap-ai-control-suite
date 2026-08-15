@@ -9,13 +9,17 @@ import (
 	"os"
 	"path/filepath"
 	qexec "qnap-ai-control-suite/agent/internal/exec"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
-type Service struct{ Exec qexec.Executor }
+type Service struct {
+	Exec         qexec.Executor
+	SysBlockRoot string
+}
 type Disk struct {
 	ID             string         `json:"id"`
 	Path           string         `json:"path"`
@@ -31,12 +35,31 @@ type Disk struct {
 	Raw            map[string]any `json:"raw"`
 }
 type RAID struct {
-	Name     string   `json:"name"`
-	Level    string   `json:"level"`
-	State    string   `json:"state"`
+	Name          string    `json:"name"`
+	Level         string    `json:"level"`
+	State         string    `json:"state"`
+	Raw           string    `json:"raw"`
+	Members       []string  `json:"members"`
+	TotalDevices  int       `json:"total_devices,omitempty"`
+	ActiveDevices int       `json:"active_devices,omitempty"`
+	Layout        string    `json:"layout,omitempty"`
+	Degraded      bool      `json:"degraded"`
+	Sync          *RAIDSync `json:"sync,omitempty"`
+}
+type RAIDSync struct {
+	Action   string   `json:"action"`
+	Progress *float64 `json:"progress_percent,omitempty"`
+	Finish   string   `json:"finish,omitempty"`
+	Speed    string   `json:"speed,omitempty"`
 	Raw      string   `json:"raw"`
-	Members  []string `json:"members"`
-	Degraded bool     `json:"degraded"`
+}
+type RAIDActionResult struct {
+	Name     string `json:"name"`
+	Action   string `json:"action"`
+	Previous string `json:"previous"`
+	Current  string `json:"current"`
+	Applied  bool   `json:"applied"`
+	DryRun   bool   `json:"dry_run"`
 }
 type Pool struct {
 	Name    string         `json:"name"`
@@ -211,7 +234,12 @@ func (s Service) Smart(ctx context.Context, id string) (map[string]any, error) {
 	}
 	path := smartctl()
 	if path == "" {
-		return map[string]any{"supported": false, "reason": "smartctl not found by runtime probe", "disk": d}, nil
+		return map[string]any{
+			"supported": false,
+			"reason":    "smartctl not installed; checked /sbin, /usr/sbin, /usr/bin, /bin, /usr/local/sbin, /usr/local/bin",
+			"disk":      d,
+			"fallback":  smartSysfsFallback(d),
+		}, nil
 	}
 	result, err := s.Exec.Run(ctx, qexec.Request{Argv: []string{path, "-j", "-a", d.Path}, Timeout: 45 * time.Second, MaxOutput: s.Exec.MaxOutput})
 	if err != nil {
@@ -233,7 +261,7 @@ func (s Service) StartSmart(ctx context.Context, id, kind string) (qexec.Result,
 	}
 	path := smartctl()
 	if path == "" {
-		return qexec.Result{}, errors.New("smartctl not found by runtime probe")
+		return qexec.Result{}, errors.New("smartctl not installed; QTS smart test requires authenticated QCLI session")
 	}
 	return s.Exec.Run(ctx, qexec.Request{Argv: []string{path, "-t", kind, d.Path}, Timeout: 30 * time.Second, MaxOutput: s.Exec.MaxOutput})
 }
@@ -242,22 +270,129 @@ func (s Service) RAID() ([]RAID, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := []RAID{}
-	for _, line := range strings.Split(string(b), "\n") {
-		f := strings.Fields(line)
-		if len(f) < 4 || !strings.HasPrefix(f[0], "md") {
+	return ParseRAIDStatus(string(b)), nil
+}
+
+var (
+	raidLayoutPattern   = regexp.MustCompile(`\[(\d+)/(\d+)\]\s+\[([U_]+)\]`)
+	raidProgressPattern = regexp.MustCompile(`(?i)(recovery|resync|reshape|check|repair|resilver)\s*=\s*([0-9]+(?:\.[0-9]+)?)%`)
+	raidFieldPattern    = regexp.MustCompile(`(?:^|\s)(finish|speed)=([^\s]+)`)
+	raidNamePattern     = regexp.MustCompile(`^md[0-9]+$`)
+)
+
+// ParseRAIDStatus parses /proc/mdstat as multi-line array records. The
+// original one-line parser lost the bitmap and resync/rebuild progress that
+// Linux emits on the following lines.
+func ParseRAIDStatus(input string) []RAID {
+	items := []RAID{}
+	var current *RAID
+	flush := func() {
+		if current != nil {
+			items = append(items, *current)
+			current = nil
+		}
+	}
+	for _, raw := range strings.Split(input, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			flush()
 			continue
 		}
-		r := RAID{Name: f[0], State: f[1], Level: f[3], Raw: line}
-		for _, member := range f[4:] {
-			if i := strings.Index(member, "["); i > 0 {
-				r.Members = append(r.Members, member[:i])
+		fields := strings.Fields(line)
+		if len(fields) > 2 && raidNamePattern.MatchString(fields[0]) && fields[1] == ":" {
+			flush()
+			current = &RAID{Name: fields[0], Raw: raw}
+			levelAt := -1
+			for i, field := range fields[2:] {
+				if strings.HasPrefix(field, "raid") {
+					current.Level = field
+					levelAt = i + 2
+					break
+				}
+				if current.State == "" {
+					current.State = field
+				}
+			}
+			if levelAt >= 0 {
+				for _, member := range fields[levelAt+1:] {
+					if i := strings.Index(member, "["); i > 0 {
+						current.Members = append(current.Members, member[:i])
+					}
+				}
+			}
+			continue
+		}
+		if current == nil {
+			continue
+		}
+		current.Raw += "\n" + raw
+		if match := raidLayoutPattern.FindStringSubmatch(line); len(match) == 4 {
+			current.TotalDevices, _ = strconv.Atoi(match[1])
+			current.ActiveDevices, _ = strconv.Atoi(match[2])
+			current.Layout = match[3]
+			current.Degraded = strings.Contains(match[3], "_")
+		}
+		if match := raidProgressPattern.FindStringSubmatch(line); len(match) == 3 {
+			progress, _ := strconv.ParseFloat(match[2], 64)
+			current.Sync = &RAIDSync{Action: strings.ToLower(match[1]), Progress: &progress, Raw: strings.TrimSpace(raw)}
+			for _, field := range raidFieldPattern.FindAllStringSubmatch(line, -1) {
+				switch field[1] {
+				case "finish":
+					current.Sync.Finish = field[2]
+				case "speed":
+					current.Sync.Speed = field[2]
+				}
 			}
 		}
-		r.Degraded = strings.Contains(line, "_")
-		out = append(out, r)
 	}
-	return out, nil
+	flush()
+	return items
+}
+
+// RAIDAction controls only the stable Linux mdraid sync_action sysfs file.
+// It intentionally does not claim QTS pool/volume management support.
+func (s Service) RAIDAction(name, action string, dryRun bool) (RAIDActionResult, error) {
+	if !raidNamePattern.MatchString(name) {
+		return RAIDActionResult{}, errors.New("RAID name must be an md device such as md0")
+	}
+	value := ""
+	switch action {
+	case "scrub_start":
+		value = "check"
+	case "scrub_stop":
+		value = "idle"
+	default:
+		return RAIDActionResult{}, errors.New("action must be scrub_start or scrub_stop")
+	}
+	root := s.SysBlockRoot
+	if root == "" {
+		root = "/sys/block"
+	}
+	path := filepath.Join(root, name, "md", "sync_action")
+	previousBytes, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return RAIDActionResult{}, fmt.Errorf("mdraid sync control is unavailable for %s", name)
+		}
+		return RAIDActionResult{}, err
+	}
+	result := RAIDActionResult{Name: name, Action: action, Previous: strings.TrimSpace(string(previousBytes)), Current: value, DryRun: dryRun}
+	if dryRun {
+		return result, nil
+	}
+	if err := os.WriteFile(path, []byte(value), 0644); err != nil {
+		return result, err
+	}
+	current, err := os.ReadFile(path)
+	if err != nil {
+		return result, err
+	}
+	result.Current = strings.TrimSpace(string(current))
+	// A small or idle array can complete a check between the write and this
+	// read. Treat that terminal state as a successful start, while still
+	// returning the observed state for the caller to inspect.
+	result.Applied = result.Current == value || (value == "check" && result.Current == "idle")
+	return result, nil
 }
 func (s Service) Pools(ctx context.Context) ([]Pool, error) {
 	path := zpool()
@@ -330,6 +465,8 @@ func (s Service) SnapshotAction(ctx context.Context, action, name, target string
 		return s.Exec.Run(ctx, qexec.Request{Argv: []string{path, "destroy", name}, Timeout: 60 * time.Second, MaxOutput: s.Exec.MaxOutput})
 	case "clone":
 		return s.Exec.Run(ctx, qexec.Request{Argv: []string{path, "clone", name, target}, Timeout: 60 * time.Second, MaxOutput: s.Exec.MaxOutput})
+	case "restore":
+		return s.Exec.Run(ctx, qexec.Request{Argv: []string{path, "rollback", name}, Timeout: 60 * time.Second, MaxOutput: s.Exec.MaxOutput})
 	}
 	return qexec.Result{}, fmt.Errorf("unsupported snapshot action: %s", action)
 }
@@ -339,7 +476,21 @@ func (s Service) QTSSnapshotCapabilities() map[string]any {
 	if path == "" {
 		return map[string]any{"supported": false, "reason": "QTS snapshot_util was not discovered"}
 	}
-	return map[string]any{"supported": true, "backend": "qts-snapshot_util", "operations": []string{"create"}, "reason": "list/delete/restore require further runtime probe"}
+	out := map[string]any{
+		"supported":  true,
+		"backend":    "qts-snapshot_util",
+		"operations": []string{"create"},
+		"reason":     "snapshot_util supports create; list/delete/restore require an authenticated QCLI session",
+	}
+	if qcli := qcliVolumesnapshot(); qcli != "" {
+		out["qcli_backend"] = map[string]any{
+			"backend":    "qts-qcli_volumesnapshot",
+			"operations": []string{"list", "delete", "restore", "clone"},
+			"supported":  false,
+			"reason":     "qcli_volumesnapshot found, but requires an authenticated QCLI session (qcli -l sid or saved auth) before MCP can invoke it",
+		}
+	}
+	return out
 }
 
 // CreateQTSSnapshot uses QTS snapshot_util commands observed on the NAS:
@@ -384,7 +535,7 @@ func transport(name string) string {
 	return "virtual"
 }
 func smartctl() string {
-	return executable([]string{"/sbin/smartctl", "/usr/sbin/smartctl", "/bin/smartctl", "/usr/bin/smartctl"})
+	return executable([]string{"/sbin/smartctl", "/usr/sbin/smartctl", "/usr/bin/smartctl", "/bin/smartctl", "/usr/local/sbin/smartctl", "/usr/local/bin/smartctl"})
 }
 func zpool() string {
 	return executable([]string{"/sbin/zpool", "/usr/sbin/zpool", "/bin/zpool", "/usr/bin/zpool"})
@@ -398,6 +549,9 @@ func qcli() string {
 func snapshotUtil() string {
 	return executable([]string{"/sbin/snapshot_util", "/usr/sbin/snapshot_util", "/bin/snapshot_util", "/usr/bin/snapshot_util"})
 }
+func qcliVolumesnapshot() string {
+	return executable([]string{"/sbin/qcli_volumesnapshot", "/usr/sbin/qcli_volumesnapshot", "/usr/bin/qcli_volumesnapshot"})
+}
 func executable(paths []string) string {
 	for _, path := range paths {
 		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
@@ -405,6 +559,16 @@ func executable(paths []string) string {
 		}
 	}
 	return ""
+}
+func smartSysfsFallback(d Disk) map[string]any {
+	attrs := map[string]any{}
+	base := filepath.Join("/sys/block", d.ID)
+	for _, name := range []string{"device/state", "device/queue_depth", "device/wwid", "queue/scheduler"} {
+		if value := read(base, name); value != "" {
+			attrs[name] = value
+		}
+	}
+	return map[string]any{"note": "smartctl is not installed; sysfs attributes only", "sysfs": attrs}
 }
 func volumeBackend(fs string) string {
 	if fs == "zfs" {

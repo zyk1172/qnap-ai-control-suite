@@ -35,7 +35,7 @@ type Feature struct {
 func (s Service) Discover(ctx context.Context) Result {
 	host, _ := os.Hostname()
 	r := Result{Hostname: host, Arch: runtime.GOARCH, CPUCount: runtime.NumCPU(), MemoryBytes: memoryBytes(), DiskCount: diskCount(), Platform: "qts_or_linux", Features: map[string]Feature{}, Utilities: map[string]string{}, QPKGConfig: fileExists("/etc/config/qpkg.conf"), QPKGs: installedQPKGs("/etc/config/qpkg.conf")}
-	for _, name := range []string{"getcfg", "setcfg", "qpkg_cli", "getsysinfo", "docker", "smartctl", "mdadm", "zpool", "zfs", "ip", "systemctl"} {
+	for _, name := range []string{"getcfg", "setcfg", "qpkg_cli", "getsysinfo", "docker", "smartctl", "mdadm", "zpool", "zfs", "ip", "systemctl", "upsc"} {
 		if path := find(name); path != "" {
 			r.Utilities[name] = path
 		}
@@ -76,7 +76,11 @@ func (s Service) Discover(ctx context.Context) Result {
 	r.Features["multimedia_console"] = qpkgFeature(r.QPKGs, []string{"multimedia console", "multimediaconsole"})
 	r.Features["iscsi"] = Feature{Supported: false, Reason: "QNAP runtime probe required for stable iSCSI adapter"}
 	r.Features["certificates"] = Feature{Supported: false, Reason: "QNAP runtime probe required for certificate inventory adapter"}
-	r.Features["ups"] = Feature{Supported: find("upsc") != "", Reason: "NUT upsc utility not found"}
+	if path := find("upsc"); path != "" {
+		r.Features["ups"] = Feature{Supported: true, Reason: "NUT upsc found at " + path}
+	} else {
+		r.Features["ups"] = Feature{Supported: false, Reason: "NUT upsc utility not found"}
+	}
 	return r
 }
 func memoryBytes() uint64 {
