@@ -1,17 +1,17 @@
 # QNAP 全控制
 
-`full_trust` 是 v1 默认 QPKG profile：
+`full_trust` 是 v2 默认 QPKG profile：
 
 ```json
 {
   "profile": "full_trust",
   "permissions": {"allowed_roots": ["/"], "allow_any_command": true, "allow_shell": true},
-  "privacy": {"redact_secrets": false},
-  "confirmation": {"mode": "off"}
+  "privacy": {"redact_secrets": true},
+  "approval": {"mode": "sensitive_only", "ttl_seconds": 600}
 }
 ```
 
-因此 agent 可通过 `nas_exec` 运行任意 executable，也可通过 `nas_shell` 执行管道、重定向和复杂 shell 操作。文件 API 可读写 `/etc`、`/var`、`/share` 与其他 root filesystem 路径。API 返回真实 Docker inspect 和环境变量；WebUI 不主动显示 secrets。
+因此 agent 可通过 `nas_exec` 运行任意 executable，也可通过 `nas_shell` 执行管道、重定向和复杂 shell 操作。文件 API 可读写 `/etc`、`/var`、`/share` 与其他 root filesystem 路径；普通写操作直接执行并审计，少数敏感操作要求一次性批准。API 返回真实 Docker inspect 和环境变量；WebUI 不主动显示 secrets。
 
 常用工具按域：
 
@@ -28,4 +28,4 @@
 - Accounts and shares：`nas_users` 返回主组与附加组关系；`nas_user_manage`、`nas_groups`、`nas_group_manage`（含 `member_add` / `member_remove`，`args` 为单个用户名）、`nas_share_list`、`nas_share_manage`、`nas_acl_get`、`nas_acl_set`。`nas_share_manage` 仅执行 probe 后配置的共享目录 argv adapter；不会把文件夹当作 QNAP shared folder。只有经 runtime probe 验证存在的系统工具会执行写操作。
 - POSIX metadata：`nas_file_manage` 的 `chmod` 和 `chown` 支持 `recursive: true`；递归时不会跟随目录内符号链接。`chown` 的 `target` 使用 `uid:gid`，`chmod` 使用八进制 `mode`。
 
-`observe`、`operate`、`admin` profile 仍可用于受限部署。它们保留 `allowed_roots`、命令列表、secret redaction 与 confirmation 模式。设置变更后重启 QPKG。
+`observe`、`operate`、`admin` profile 仍可用于受限部署。它们保留 `allowed_roots`、命令列表和 secret redaction；审批改由独立 `approval.mode` 配置。设置变更后重启 QPKG。

@@ -16,7 +16,7 @@ func TestMigratesLegacy032(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Version != 1 || cfg.Auth.TokenSHA256 != "abc" || cfg.Files.MaxInlineBytes != 1024 || cfg.Command.TimeoutSeconds != 9 || cfg.Profile != "full_trust" || !cfg.Permissions.AllowAnyCommand || !cfg.Permissions.AllowShell || cfg.Confirmation.Mode != "off" {
+	if cfg.Version != 2 || cfg.Auth.TokenSHA256 != "abc" || cfg.Files.MaxInlineBytes != 1024 || cfg.Command.TimeoutSeconds != 9 || cfg.Profile != "full_trust" || !cfg.Permissions.AllowAnyCommand || !cfg.Permissions.AllowShell || cfg.Approval.Mode != "sensitive_only" {
 		t.Fatalf("migration failed: %+v", cfg)
 	}
 }
@@ -25,8 +25,33 @@ func TestFullTrustNormalizes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Permissions.AllowAnyCommand || !cfg.Permissions.AllowShell || cfg.Privacy.RedactSecrets || cfg.Confirmation.Mode != "off" || len(cfg.Permissions.AllowedRoots) != 1 || cfg.Permissions.AllowedRoots[0] != "/" {
+	if !cfg.Permissions.AllowAnyCommand || !cfg.Permissions.AllowShell || cfg.Approval.Mode != "sensitive_only" || cfg.Audit.RedactSecrets == nil || !*cfg.Audit.RedactSecrets || len(cfg.Permissions.AllowedRoots) != 1 || cfg.Permissions.AllowedRoots[0] != "/" {
 		t.Fatalf("unexpected full trust: %+v", cfg)
+	}
+}
+
+func TestV1ConfirmationOffMigratesToSensitiveOnlyApproval(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.json")
+	data := `{"version":1,"auth":{"type":"bearer","token_sha256":"abc"},"profile":"full_trust","permissions":{"allowed_roots":["/"],"allow_any_command":true,"allow_shell":true},"confirmation":{"mode":"off","ttl_seconds":120}}`
+	if err := os.WriteFile(p, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Version != 2 || cfg.Approval.Mode != "sensitive_only" || cfg.Approval.TTLSeconds != 120 || cfg.Audit.RedactSecrets == nil || !*cfg.Audit.RedactSecrets {
+		t.Fatalf("unexpected v1 migration: %#v", cfg)
+	}
+}
+
+func TestApprovalAndJobDefaultsAreIndependent(t *testing.T) {
+	cfg, err := Normalize(Config{Auth: Auth{TokenSHA256: "abc"}, Permissions: Permissions{AllowedRoots: []string{"/share"}}, Approval: Approval{Mode: "all_write", TTLSeconds: 30}, Jobs: Jobs{MaxHistory: 1, MaxConcurrent: 2, JournalPath: "/tmp/jobs.jsonl"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Approval.Mode != "all_write" || cfg.Jobs.MaxConcurrent != 2 || cfg.Jobs.JournalPath != "/tmp/jobs.jsonl" {
+		t.Fatalf("defaults overwrote explicit policy: %#v", cfg)
 	}
 }
 func TestRejectsInvalidProfile(t *testing.T) {

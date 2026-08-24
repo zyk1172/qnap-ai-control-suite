@@ -24,6 +24,19 @@ type Inventory struct {
 	CLIError string              `json:"qpkg_cli_error,omitempty"`
 }
 
+type procProcess struct {
+	pid     int
+	pidText string
+	exe     string
+	cmdline string
+}
+
+type procSnapshot struct {
+	processes []procProcess
+}
+
+type procScanner func(string) (procSnapshot, error)
+
 func (s Service) List(ctx context.Context) ([]map[string]string, error) {
 	path := s.Path
 	if path == "" {
@@ -48,21 +61,12 @@ func (s Service) Inventory(ctx context.Context) (Inventory, error) {
 	} else {
 		out.CLI = &result
 	}
+	populateProcessStates(out.Packages, s.procRoot(), scanProc)
 	for _, pkg := range out.Packages {
 		if root := pkg["Install_Path"]; root != "" {
 			script := filepath.Join(root, ".install")
 			if _, err := os.Stat(script); err == nil {
 				pkg["init_script"] = script
-			}
-			pids, procErr := runningPIDs(root, s.procRoot())
-			if procErr != nil {
-				pkg["process_state"] = "unknown"
-				pkg["process_state_error"] = procErr.Error()
-			} else if len(pids) > 0 {
-				pkg["process_state"] = "running"
-				pkg["process_pids"] = strings.Join(pids, ",")
-			} else {
-				pkg["process_state"] = "stopped"
 			}
 		}
 		if value := pkg["Enable"]; value != "" {
@@ -79,36 +83,114 @@ func (s Service) procRoot() string {
 	return "/proc"
 }
 
-func runningPIDs(installPath, procRoot string) ([]string, error) {
-	root := filepath.Clean(installPath)
+func populateProcessStates(packages []map[string]string, procRoot string, scan procScanner) {
+	needsScan := false
+	for _, pkg := range packages {
+		if pkg["Install_Path"] != "" {
+			needsScan = true
+			break
+		}
+	}
+	if !needsScan {
+		return
+	}
+
+	snapshot, procErr := scan(procRoot)
+	for _, pkg := range packages {
+		root := pkg["Install_Path"]
+		if root == "" {
+			continue
+		}
+		if procErr != nil {
+			pkg["process_state"] = "unknown"
+			pkg["process_state_error"] = procErr.Error()
+			continue
+		}
+		pids := snapshot.matchingPIDs(root)
+		if len(pids) > 0 {
+			pkg["process_state"] = "running"
+			pkg["process_pids"] = strings.Join(pids, ",")
+		} else {
+			pkg["process_state"] = "stopped"
+		}
+	}
+}
+
+func scanProc(procRoot string) (procSnapshot, error) {
 	entries, err := os.ReadDir(procRoot)
+	if err != nil {
+		return procSnapshot{}, err
+	}
+	processes := make([]procProcess, 0, len(entries))
+	for _, entry := range entries {
+		pidText := entry.Name()
+		pid, ok := parsePID(pidText)
+		if !entry.IsDir() || !ok {
+			continue
+		}
+		base := filepath.Join(procRoot, pidText)
+		exe, _ := os.Readlink(filepath.Join(base, "exe"))
+		cmdline, _ := os.ReadFile(filepath.Join(base, "cmdline"))
+		processes = append(processes, procProcess{
+			pid:     pid,
+			pidText: pidText,
+			exe:     exe,
+			cmdline: string(cmdline),
+		})
+	}
+	sort.Slice(processes, func(i, j int) bool {
+		if processes[i].pid == processes[j].pid {
+			return processes[i].pidText < processes[j].pidText
+		}
+		return processes[i].pid < processes[j].pid
+	})
+	return procSnapshot{processes: processes}, nil
+}
+
+func (snapshot procSnapshot) matchingPIDs(installPath string) []string {
+	root := filepath.Clean(installPath)
+	pids := make([]string, 0)
+	for _, process := range snapshot.processes {
+		if matchesInstallPath(root, process.exe) || matchesCmdline(root, process.cmdline) {
+			pids = append(pids, process.pidText)
+		}
+	}
+	return pids
+}
+
+func runningPIDs(installPath, procRoot string) ([]string, error) {
+	snapshot, err := scanProc(procRoot)
 	if err != nil {
 		return nil, err
 	}
-	pids := []string{}
-	for _, entry := range entries {
-		pid := entry.Name()
-		if !entry.IsDir() || !isPID(pid) {
-			continue
-		}
-		base := filepath.Join(procRoot, pid)
-		exe, _ := os.Readlink(filepath.Join(base, "exe"))
-		cmdline, _ := os.ReadFile(filepath.Join(base, "cmdline"))
-		if matchesInstallPath(root, exe) || matchesInstallPath(root, strings.ReplaceAll(string(cmdline), "\x00", " ")) {
-			pids = append(pids, pid)
-		}
-	}
-	sort.Slice(pids, func(i, j int) bool {
-		left, _ := strconv.Atoi(pids[i])
-		right, _ := strconv.Atoi(pids[j])
-		return left < right
-	})
-	return pids, nil
+	return snapshot.matchingPIDs(installPath), nil
 }
 
 func isPID(value string) bool {
-	_, err := strconv.Atoi(value)
-	return err == nil
+	_, ok := parsePID(value)
+	return ok
+}
+
+func parsePID(value string) (int, bool) {
+	if value == "" {
+		return 0, false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return 0, false
+		}
+	}
+	number, err := strconv.Atoi(value)
+	return number, err == nil
+}
+
+func matchesCmdline(root, cmdline string) bool {
+	for _, argument := range strings.Split(cmdline, "\x00") {
+		if matchesInstallPath(root, argument) {
+			return true
+		}
+	}
+	return false
 }
 
 func matchesInstallPath(root, value string) bool {

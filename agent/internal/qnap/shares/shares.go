@@ -14,7 +14,14 @@ import (
 	"time"
 )
 
-type Service struct{ Exec qexec.Executor }
+type Service struct {
+	Exec qexec.Executor
+
+	// SMBStatusPath is an optional absolute path override used by the
+	// read-only SMB status probe and its tests. When empty, the service looks
+	// for smbstatus in PATH and the standard system locations.
+	SMBStatusPath string
+}
 type Share struct {
 	Name        string            `json:"name"`
 	Path        string            `json:"path"`

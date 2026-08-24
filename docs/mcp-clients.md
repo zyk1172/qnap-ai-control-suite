@@ -23,12 +23,12 @@ Mac 上安装 Node 20+，然后在 Codex、OpenClaw 或 Hermes 中加入：
 
 如果某个智能体已经安装过本 MCP，NAS 更新后不需要改 MCP 协议配置，但需要让该智能体使用当前版本的 Mac bridge：
 
-1. 更新 Mac 上的仓库到 v1.0.16 发布分支：
+1. 更新 Mac 上的仓库到 v2.0.0 分支或发布版本：
 
    ```bash
    cd /path/to/qnap-ai-control-suite
    git fetch origin
-   git checkout release/v1.0.16-test-report-fixes
+   git checkout codex/v2-agent-native-control-plane
    git pull
    cd mac-bridge
    npm install
@@ -36,11 +36,11 @@ Mac 上安装 Node 20+，然后在 Codex、OpenClaw 或 Hermes 中加入：
 
 2. 确认该智能体的 MCP 配置仍指向同一目录下的 `mac-bridge/src/server.js` 或 `mac-bridge/src/mcp-server.js`，不要继续指向旧目录里复制出来的旧 bridge。
 
-3. 重启智能体或重启其 MCP 子进程。MCP 的 `tools/list` 在进程启动时加载，不重启不会拿到 v1.0.16 的新工具和修复。
+3. 重启智能体或重启其 MCP 子进程。MCP 的 `tools/list` 在进程启动时加载，不重启不会拿到 v2 的新工具与 toolset 设置。
 
 4. 验证顺序：
 
-   1. `nas_health`，确认返回 `"version":"1.0.16"`。
+   1. `nas_health`，确认返回 `"version":"2.0.0"`。
    2. `nas_process_list`，确认不再返回空数组。
    3. `nas_service_list`，确认返回 QNAP QPKG 服务列表。
    4. `nas_acl_get`，确认能读取 ACL 或返回 stat fallback。
@@ -56,7 +56,13 @@ Mac 上安装 Node 20+，然后在 Codex、OpenClaw 或 Hermes 中加入：
 4. `nas_docker_containers`
 5. `nas_exec`，参数 `{ "argv": ["/bin/df", "-h"] }`
 
-完整 shell pipeline 使用 `nas_shell`，例如 `{ "shell": "df -h | sort" }`。在 `full_trust` 下无需 prepare/confirm；每次调用仍写入 audit log。
+完整 shell pipeline 使用 `nas_shell`，例如 `{ "shell": "df -h | sort" }`。在 `full_trust` 下普通操作无需 prepare/confirm。敏感操作由 NAS 返回一次性 `approval_id` 后，MCP Bridge 会发起标准 elicitation；用户批准后 Bridge 内部记录 decision，并自动以同一 method、path、序列化 body、request ID、idempotency key 和 timeout policy 重试原始请求一次。模型不拥有批准工具；拒绝不重试，不支持 elicitation 的 client 会 fail closed。每次调用都会写入 audit log。
+
+Bridge 对 Hermes 式 `action=accept` + 空 `content` 兼容为“允许这一次”；`decline` 和 `cancel` 会记录拒绝。批准接口 `/v1/approvals/{approval_id}/decision` 是 Bridge/用户交互层的 HTTP 控制流，不会出现在 MCP tools/list 中。
+
+审批交互默认最多等待 300 秒，并按 NAS ticket 的剩余有效期裁剪；可通过 `QACS_APPROVAL_TIMEOUT_MS` 调整，Bridge 会将其限制在 9 分钟以内。
+
+当前仓库固定使用已验证的 `@modelcontextprotocol/sdk@1.30.0`。它协商支持的 2025 MCP protocol versions；对尚未被该 SDK 识别的未来版本会按 SDK 行为回落到当前支持的版本，不宣称提供未验证的 2026 专属协议能力。Bridge 的审批闭环只依赖已验证的标准 form-mode elicitation。
 
 ## 长任务与 Job
 

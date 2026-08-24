@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qacs-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: Checks and staging build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: agent/go.mod
+          cache: false
+
+      - name: Go unit tests
+        working-directory: agent
+        run: go test ./...
+
+      - name: Go race tests
+        working-directory: agent
+        run: go test -race ./...
+
+      - name: Go vet
+        working-directory: agent
+        run: go vet ./...
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.14.0
+
+      - name: Node clean install and tests
+        working-directory: mac-bridge
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm test
+
+      - name: Shell syntax
+        run: |
+          while IFS= read -r -d '' file; do
+            bash -n "$file"
+          done < <(git ls-files -z -- '*.sh')
+
+      - name: Build Linux agent
+        env:
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          ./scripts/build_agent.sh
+          test -x dist/linux-amd64/qnap-ai-control-agent
+          file dist/linux-amd64/qnap-ai-control-agent
+
+      - name: Build QPKG staging archive without QDK
+        env:
+          GOARCH: amd64
+        run: |
+          set -euo pipefail
+
+          version="$(tr -d '[:space:]' < VERSION)"
+          case "$version" in
+            ''|*[!A-Za-z0-9._-]*)
+              echo "VERSION contains unsupported characters" >&2
+              exit 1
+              ;;
+          esac
+
+          staging_dir="$RUNNER_TEMP/qnap-ai-control-qpkg-staging"
+          archive="dist/QnapAIControl-${version}-linux-${GOARCH}.qpkg-staging.tar.gz"
+          rm -rf "$staging_dir"
+          mkdir -p "$staging_dir/shared/bin" "$staging_dir/icons" dist
+
+          cp "dist/linux-${GOARCH}/qnap-ai-control-agent" "$staging_dir/shared/bin/"
+          cp scripts/qnap_probe.sh "$staging_dir/shared/bin/qnap-ai-control-probe"
+          sed "s/__VERSION__/${version}/g" qpkg/qpkg.cfg > "$staging_dir/qpkg.cfg"
+          cp qpkg/shared/qnap-ai-control-agent.sh "$staging_dir/shared/"
+          cp qpkg/icons/QnapAIControl* "$staging_dir/icons/"
+          : > "$staging_dir/package_routines"
+          chmod 0755 \
+            "$staging_dir/shared/bin/qnap-ai-control-agent" \
+            "$staging_dir/shared/bin/qnap-ai-control-probe" \
+            "$staging_dir/shared/qnap-ai-control-agent.sh"
+
+          tar \
+            --sort=name \
+            --format=ustar \
+            --mtime='UTC 1970-01-01' \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            --no-xattrs \
+            -C "$staging_dir" \
+            -cf - . | gzip -n > "$archive"
+
+          tar -tzf "$archive" | sort
+          tar -tzf "$archive" | grep -Fx './qpkg.cfg'
+          tar -tzf "$archive" | grep -Fx './shared/bin/qnap-ai-control-agent'
+          tar -tzf "$archive" | grep -Fx './shared/bin/qnap-ai-control-probe'
+          if tar -tzf "$archive" | grep -Eqi '(^|/)(qbuild|QDK)(/|$)'; then
+            echo "QPKG staging archive unexpectedly contains QDK material" >&2
+            exit 1
+          fi
+          sha256sum "$archive"

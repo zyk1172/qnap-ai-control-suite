@@ -1,0 +1,24 @@
+{
+  "Id": "reconstruct456",
+  "Name": "/gpu-worker",
+  "Config": {
+    "Image": "example/worker:1",
+    "Entrypoint": ["/bin/sh", "-c"],
+    "Cmd": ["run-worker"],
+    "Env": ["API_TOKEN=fixture-secret"]
+  },
+  "HostConfig": {
+    "NetworkMode": "default",
+    "DeviceRequests": [{"Driver": "nvidia", "Count": -1, "Capabilities": [["gpu"]]}]
+  },
+  "NetworkSettings": {
+    "Networks": {
+      "custom": {
+        "IPAddress": "192.0.2.10",
+        "IPPrefixLen": 24,
+        "Gateway": "192.0.2.1",
+        "Aliases": ["gpu-worker"]
+      }
+    }
+  }
+}

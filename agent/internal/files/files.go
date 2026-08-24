@@ -3,22 +3,82 @@ package files
 import (
 	"archive/tar"
 	"archive/zip"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
+)
+
+var (
+	// ErrCASMismatch is returned when expected_sha256 does not match the
+	// current contents of the destination file.
+	ErrCASMismatch = errors.New("expected_sha256 mismatch")
+	// ErrSymlink is returned when an operation would have to follow or replace
+	// a symbolic link. Tree operations deliberately do not follow links.
+	ErrSymlink = errors.New("symbolic link is not allowed")
 )
 
 type Service struct {
 	Roots          []string
 	MaxInlineBytes int64
 }
+
+// WriteOptions controls an atomic file replacement. Mode is used for new
+// files; an existing file keeps its current mode, matching the old Write API.
+// ExpectedSHA256 accepts either a raw 64-character hash or the sha256:<hash>
+// format returned by Checksum. When Backup is true, the previous file is
+// atomically copied to BackupPath, or to <path>.bak when BackupPath is empty.
+type WriteOptions struct {
+	Mode           os.FileMode
+	CreateParents  bool
+	ExpectedSHA256 string
+	Backup         bool
+	BackupPath     string
+}
+
+type WriteResult struct {
+	Path       string `json:"path"`
+	BackupPath string `json:"backup_path,omitempty"`
+	Bytes      int64  `json:"bytes"`
+	SHA256     string `json:"sha256"`
+}
+
+// TreeOptions controls SyncTree. DeleteExtraneous is intentionally false by
+// default so a sync cannot remove destination-only files unless the caller
+// explicitly opts in.
+type TreeOptions struct {
+	DeleteExtraneous bool
+}
+
+type TreeResult struct {
+	Source             string   `json:"source"`
+	Target             string   `json:"target"`
+	FilesCopied        int      `json:"files_copied"`
+	DirectoriesCreated int      `json:"directories_created"`
+	EntriesDeleted     int      `json:"entries_deleted"`
+	DeletedPaths       []string `json:"deleted_paths,omitempty"`
+	SkippedSymlinks    []string `json:"skipped_symlinks,omitempty"`
+}
+
+// All writes performed by one agent process are serialized. This makes the
+// expected-hash check and final rename a compare-and-swap transaction for the
+// process that owns the agent. The final rename remains atomic across
+// processes; callers that coordinate writes from multiple processes should
+// use the service as the single writer.
+var fileWriteMu sync.Mutex
+
 type Entry struct {
 	Name      string `json:"name"`
 	Path      string `json:"path"`
@@ -53,6 +113,13 @@ func (s Service) Resolve(path string, forCreate bool) (string, error) {
 		parent, err := filepath.EvalSymlinks(filepath.Dir(clean))
 		if err != nil {
 			return "", fmt.Errorf("resolve parent: %w", err)
+		}
+		if info, err := os.Lstat(clean); err == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				return "", fmt.Errorf("%w: %s", ErrSymlink, clean)
+			}
+		} else if !os.IsNotExist(err) {
+			return "", err
 		}
 		resolved = filepath.Join(parent, filepath.Base(clean))
 	} else {
@@ -136,25 +203,216 @@ func (s Service) Read(path string, offset, max int64) (ReadResult, error) {
 	return ReadResult{Path: resolved, ContentBase64: base64.StdEncoding.EncodeToString(b), Bytes: int64(len(b)), Offset: offset, Truncated: truncated}, nil
 }
 func (s Service) Write(path string, data []byte, mode os.FileMode, parents bool) (string, error) {
-	if mode == 0 {
-		mode = 0644
-	}
-	if parents {
-		if err := s.authorizeParent(path); err != nil {
-			return "", err
-		}
-		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			return "", err
-		}
-	}
-	resolved, err := s.Resolve(path, true)
+	result, err := s.WriteAtomic(path, data, WriteOptions{Mode: mode, CreateParents: parents})
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(resolved, data, mode); err != nil {
+	return result.Path, nil
+}
+
+// WriteAtomic atomically replaces path with data. The temporary file is
+// created in the destination directory, synced, renamed, and followed by a
+// parent-directory sync so a successful return means the rename is durable on
+// filesystems that support directory fsync.
+func (s Service) WriteAtomic(path string, data []byte, options WriteOptions) (WriteResult, error) {
+	return s.writeAtomic(path, bytes.NewReader(data), int64(len(data)), options)
+}
+
+// WriteWithOptions is an explicit alias for callers that prefer the options
+// terminology. Write remains the backwards-compatible four-argument API.
+func (s Service) WriteWithOptions(path string, data []byte, options WriteOptions) (WriteResult, error) {
+	return s.WriteAtomic(path, data, options)
+}
+
+// AtomicWrite is kept as a discoverable alias for the new atomic write
+// capability without changing the existing Write signature.
+func (s Service) AtomicWrite(path string, data []byte, options WriteOptions) (WriteResult, error) {
+	return s.WriteAtomic(path, data, options)
+}
+
+func (s Service) writeAtomic(path string, source io.Reader, bytesCount int64, options WriteOptions) (WriteResult, error) {
+	if options.Mode == 0 {
+		options.Mode = 0644
+	}
+	if options.CreateParents {
+		if err := s.authorizeParent(path); err != nil {
+			return WriteResult{}, err
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return WriteResult{}, err
+		}
+	}
+
+	fileWriteMu.Lock()
+	defer fileWriteMu.Unlock()
+
+	resolved, err := s.Resolve(path, true)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	info, err := os.Lstat(resolved)
+	if err != nil && !os.IsNotExist(err) {
+		return WriteResult{}, err
+	}
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return WriteResult{}, fmt.Errorf("%w: %s", ErrSymlink, resolved)
+		}
+		if !info.Mode().IsRegular() {
+			return WriteResult{}, fmt.Errorf("write target is not a regular file: %s", resolved)
+		}
+	}
+
+	expected, err := normalizeSHA256(options.ExpectedSHA256)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	if expected != "" {
+		if err := verifyExpectedSHA256(resolved, expected); err != nil {
+			return WriteResult{}, err
+		}
+	}
+
+	mode := options.Mode
+	if info != nil {
+		mode = info.Mode()
+	}
+	backupPath := ""
+	if options.Backup && info != nil {
+		backupPath = options.BackupPath
+		if backupPath == "" {
+			backupPath = resolved + ".bak"
+		}
+		backupPath, err = s.Resolve(backupPath, true)
+		if err != nil {
+			return WriteResult{}, fmt.Errorf("resolve backup: %w", err)
+		}
+		if filepath.Clean(backupPath) == filepath.Clean(resolved) {
+			return WriteResult{}, errors.New("backup path must differ from write path")
+		}
+		if err := copyFileAtomicUnlocked(resolved, backupPath, info.Mode()); err != nil {
+			return WriteResult{}, fmt.Errorf("backup existing file: %w", err)
+		}
+	}
+	if err := atomicReplaceReader(resolved, source, mode); err != nil {
+		return WriteResult{}, err
+	}
+
+	digest, err := hashFile(resolved)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	return WriteResult{Path: resolved, BackupPath: backupPath, Bytes: bytesCount, SHA256: "sha256:" + digest}, nil
+}
+
+func normalizeSHA256(value string) (string, error) {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return "", nil
+	}
+	value = strings.TrimPrefix(value, "sha256:")
+	if len(value) != sha256.Size*2 {
+		return "", errors.New("expected_sha256 must be a 64-character SHA-256 hash")
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return "", fmt.Errorf("expected_sha256 is invalid: %w", err)
+	}
+	return value, nil
+}
+
+func verifyExpectedSHA256(path, expected string) error {
+	actual, err := hashFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("%w: target does not exist", ErrCASMismatch)
+		}
+		return err
+	}
+	if actual != expected {
+		return fmt.Errorf("%w: expected %s, got %s", ErrCASMismatch, expected, actual)
+	}
+	return nil
+}
+
+func hashFile(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
 		return "", err
 	}
-	return resolved, nil
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("%w: %s", ErrSymlink, path)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("cannot hash non-regular file: %s", path)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+func atomicReplaceReader(target string, source io.Reader, mode os.FileMode) error {
+	dir := filepath.Dir(target)
+	base := filepath.Base(target)
+	tmp, err := os.CreateTemp(dir, "."+base+".tmp-")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	if err := tmp.Chmod(mode.Perm()); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := io.Copy(tmp, source); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, target); err != nil {
+		return err
+	}
+	removeTemp = false
+	return syncDirectory(dir)
+}
+
+func syncDirectory(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	syncErr := dir.Sync()
+	closeErr := dir.Close()
+	if syncErr != nil {
+		// macOS filesystems may reject directory fsync even though the rename
+		// itself is durable enough for local tests. QNAP runs Linux, where a
+		// directory fsync error remains fatal.
+		if runtime.GOOS != "linux" && (errors.Is(syncErr, syscall.EINVAL) || errors.Is(syncErr, syscall.ENOTSUP)) {
+			syncErr = nil
+		}
+	}
+	if syncErr != nil {
+		return syncErr
+	}
+	return closeErr
 }
 func (s Service) Append(path string, data []byte, mode os.FileMode, parents bool) (string, error) {
 	if mode == 0 {
@@ -267,6 +525,320 @@ func (s Service) DU(path string) (int64, error) {
 	return total, err
 }
 
+// CopyTree recursively copies a directory into target. Existing destination
+// files are replaced atomically, destination-only entries are preserved, and
+// source symbolic links are skipped rather than followed.
+func (s Service) CopyTree(source, target string) (TreeResult, error) {
+	return s.SyncTreeWithOptions(source, target, TreeOptions{})
+}
+
+// SyncTree mirrors source into target. deleteExtraneous is explicit because
+// the safe default is to retain destination-only files.
+func (s Service) SyncTree(source, target string, deleteExtraneous bool) (TreeResult, error) {
+	return s.SyncTreeWithOptions(source, target, TreeOptions{DeleteExtraneous: deleteExtraneous})
+}
+
+// SyncTreeWithOptions is the options form used by callers that need the
+// default non-destructive sync or want to opt in to deleting extras.
+func (s Service) SyncTreeWithOptions(source, target string, options TreeOptions) (TreeResult, error) {
+	sourceResolved, err := s.Resolve(source, false)
+	if err != nil {
+		return TreeResult{}, err
+	}
+	sourceInfo, err := os.Lstat(sourceResolved)
+	if err != nil {
+		return TreeResult{}, err
+	}
+	if sourceInfo.Mode()&os.ModeSymlink != 0 {
+		return TreeResult{}, fmt.Errorf("%w: %s", ErrSymlink, sourceResolved)
+	}
+	if !sourceInfo.IsDir() {
+		return TreeResult{}, fmt.Errorf("tree source is not a directory: %s", sourceResolved)
+	}
+
+	targetClean, err := filepath.Abs(filepath.Clean(target))
+	if err != nil {
+		return TreeResult{}, err
+	}
+	targetForOverlap := targetClean
+	if parentResolved, err := filepath.EvalSymlinks(filepath.Dir(targetClean)); err == nil {
+		targetForOverlap = filepath.Join(parentResolved, filepath.Base(targetClean))
+	}
+	if within(sourceResolved, targetForOverlap) || within(targetForOverlap, sourceResolved) {
+		return TreeResult{}, errors.New("tree source and target must not overlap")
+	}
+	targetResolved, err := s.prepareTreeTarget(target)
+	if err != nil {
+		return TreeResult{}, err
+	}
+	if within(sourceResolved, targetResolved) || within(targetResolved, sourceResolved) {
+		return TreeResult{}, errors.New("tree source and target must not overlap")
+	}
+
+	result := TreeResult{Source: sourceResolved, Target: targetResolved}
+	sourceEntries := map[string]struct{}{".": {}}
+	err = filepath.WalkDir(sourceResolved, func(current string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if current == sourceResolved {
+			return nil
+		}
+		rel, err := filepath.Rel(sourceResolved, current)
+		if err != nil {
+			return err
+		}
+		rel = filepath.Clean(rel)
+		if rel == "." || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			return errors.New("tree entry escapes source")
+		}
+		sourceEntries[rel] = struct{}{}
+		targetPath := filepath.Join(targetResolved, rel)
+		if !within(targetPath, targetResolved) {
+			return errors.New("tree entry escapes target")
+		}
+
+		if entry.Type()&os.ModeSymlink != 0 {
+			result.SkippedSymlinks = append(result.SkippedSymlinks, current)
+			return nil
+		}
+		if entry.IsDir() {
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			created, err := ensureTreeDirectory(targetResolved, targetPath, info.Mode(), options.DeleteExtraneous, &result)
+			if err != nil {
+				return err
+			}
+			if created {
+				result.DirectoriesCreated++
+			}
+			return nil
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported special file in tree: %s", current)
+		}
+		if err := prepareTreeFileDestination(targetResolved, targetPath, options.DeleteExtraneous, &result); err != nil {
+			return err
+		}
+		if err := copyFileAtomic(current, targetPath, info.Mode()); err != nil {
+			return err
+		}
+		result.FilesCopied++
+		return nil
+	})
+	if err != nil {
+		return result, err
+	}
+
+	if options.DeleteExtraneous {
+		if err := deleteTreeExtras(targetResolved, sourceEntries, &result); err != nil {
+			return result, err
+		}
+	}
+	if err := syncDirectory(targetResolved); err != nil {
+		return result, err
+	}
+	sort.Strings(result.DeletedPaths)
+	sort.Strings(result.SkippedSymlinks)
+	return result, nil
+}
+
+func (s Service) prepareTreeTarget(target string) (string, error) {
+	clean, err := filepath.Abs(filepath.Clean(target))
+	if err != nil {
+		return "", err
+	}
+	if info, err := os.Lstat(clean); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("%w: %s", ErrSymlink, clean)
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("tree target is not a directory: %s", clean)
+		}
+	} else if !os.IsNotExist(err) {
+		return "", err
+	} else {
+		if err := s.authorizeParent(clean); err != nil {
+			return "", err
+		}
+		if err := os.MkdirAll(clean, 0755); err != nil {
+			return "", err
+		}
+	}
+	resolved, err := s.Resolve(clean, true)
+	if err != nil {
+		return "", err
+	}
+	resolved, err = s.Resolve(resolved, false)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(resolved)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("%w: %s", ErrSymlink, resolved)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("tree target is not a directory: %s", resolved)
+	}
+	return resolved, nil
+}
+
+func ensureTreeDirectory(root, path string, mode os.FileMode, replace bool, result *TreeResult) (bool, error) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return false, errors.New("tree directory escapes target")
+	}
+	if rel == "." {
+		return false, os.Chmod(root, mode.Perm())
+	}
+	current := root
+	created := false
+	parts := strings.Split(rel, string(os.PathSeparator))
+	for _, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, statErr := os.Lstat(current)
+		if os.IsNotExist(statErr) {
+			if err := os.Mkdir(current, mode.Perm()); err != nil {
+				return created, err
+			}
+			created = true
+			continue
+		}
+		if statErr != nil {
+			return created, statErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return created, fmt.Errorf("%w: %s", ErrSymlink, current)
+		}
+		if !info.IsDir() {
+			if !replace {
+				return created, fmt.Errorf("tree destination is not a directory: %s", current)
+			}
+			if err := os.RemoveAll(current); err != nil {
+				return created, err
+			}
+			result.EntriesDeleted++
+			result.DeletedPaths = append(result.DeletedPaths, current)
+			if err := os.Mkdir(current, mode.Perm()); err != nil {
+				return created, err
+			}
+			created = true
+		}
+	}
+	return created, os.Chmod(path, mode.Perm())
+}
+
+func prepareTreeFileDestination(root, path string, replace bool, result *TreeResult) error {
+	if err := ensureTreeParent(root, filepath.Dir(path), replace, result); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: %s", ErrSymlink, path)
+	}
+	if info.IsDir() {
+		if !replace {
+			return fmt.Errorf("tree destination is a directory: %s", path)
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+		result.EntriesDeleted++
+		result.DeletedPaths = append(result.DeletedPaths, path)
+	}
+	return nil
+}
+
+func ensureTreeParent(root, path string, replace bool, result *TreeResult) error {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return errors.New("tree parent escapes target")
+	}
+	if rel == "." {
+		return nil
+	}
+	current := root
+	for _, part := range strings.Split(rel, string(os.PathSeparator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, statErr := os.Lstat(current)
+		if os.IsNotExist(statErr) {
+			if err := os.Mkdir(current, 0755); err != nil {
+				return err
+			}
+			continue
+		}
+		if statErr != nil {
+			return statErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: %s", ErrSymlink, current)
+		}
+		if !info.IsDir() {
+			if !replace {
+				return fmt.Errorf("tree parent is not a directory: %s", current)
+			}
+			if err := os.RemoveAll(current); err != nil {
+				return err
+			}
+			result.EntriesDeleted++
+			result.DeletedPaths = append(result.DeletedPaths, current)
+			if err := os.Mkdir(current, 0755); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func deleteTreeExtras(root string, sourceEntries map[string]struct{}, result *TreeResult) error {
+	return filepath.WalkDir(root, func(current string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if current == root {
+			return nil
+		}
+		rel, err := filepath.Rel(root, current)
+		if err != nil {
+			return err
+		}
+		if _, ok := sourceEntries[filepath.Clean(rel)]; ok {
+			return nil
+		}
+		if err := os.RemoveAll(current); err != nil {
+			return err
+		}
+		result.EntriesDeleted++
+		result.DeletedPaths = append(result.DeletedPaths, current)
+		if entry.IsDir() && entry.Type()&os.ModeSymlink == 0 {
+			return filepath.SkipDir
+		}
+		return nil
+	})
+}
+
 // authorizeParent verifies the closest existing parent before mkdir can create
 // any directories. This keeps create_parents inside the configured roots.
 func (s Service) authorizeParent(path string) error {
@@ -377,39 +949,72 @@ func (s Service) Checksum(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	f, err := os.Open(resolved)
+	digest, err := hashFile(resolved)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
-	h := sha256.New()
-	_, err = io.Copy(h, f)
-	return fmt.Sprintf("sha256:%x", h.Sum(nil)), err
+	return "sha256:" + digest, nil
 }
 func within(path, root string) bool {
 	rel, err := filepath.Rel(root, path)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && !filepath.IsAbs(rel)
 }
 func copyFile(from, to string) error {
+	info, err := os.Lstat(from)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: %s", ErrSymlink, from)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("copy source is not a regular file: %s", from)
+	}
+	return copyFileAtomic(from, to, info.Mode())
+}
+
+func copyFileAtomic(from, to string, mode os.FileMode) error {
+	info, err := os.Lstat(from)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: %s", ErrSymlink, from)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("copy source is not a regular file: %s", from)
+	}
 	in, err := os.Open(from)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	info, err := in.Stat()
+	if info, err := in.Stat(); err != nil {
+		return err
+	} else if !info.Mode().IsRegular() {
+		return fmt.Errorf("copy source is not a regular file: %s", from)
+	}
+	fileWriteMu.Lock()
+	defer fileWriteMu.Unlock()
+	return copyFileAtomicUnlockedWithReader(in, from, to, mode)
+}
+
+func copyFileAtomicUnlocked(from, to string, mode os.FileMode) error {
+	in, err := os.Open(from)
 	if err != nil {
 		return err
 	}
-	out, err := os.OpenFile(to, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
-	if err != nil {
+	defer in.Close()
+	return copyFileAtomicUnlockedWithReader(in, from, to, mode)
+}
+
+func copyFileAtomicUnlockedWithReader(in *os.File, from, to string, mode os.FileMode) error {
+	if info, err := in.Stat(); err != nil {
 		return err
+	} else if !info.Mode().IsRegular() {
+		return fmt.Errorf("copy source is not a regular file: %s", from)
 	}
-	_, copyErr := io.Copy(out, in)
-	closeErr := out.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	return closeErr
+	return atomicReplaceReader(to, in, mode)
 }
 
 func parseOwner(value string) (int, int, error) {

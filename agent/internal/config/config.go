@@ -31,6 +31,13 @@ type Confirmation struct {
 	Mode       string `json:"mode"`
 	TTLSeconds int    `json:"ttl_seconds"`
 }
+
+// Approval is independent from the permission profile. Confirmation remains
+// only as a read-compatible v1 field and is no longer consulted at runtime.
+type Approval struct {
+	Mode       string `json:"mode"`
+	TTLSeconds int    `json:"ttl_seconds"`
+}
 type Command struct {
 	TimeoutSeconds int `json:"timeout_seconds"`
 	MaxOutputBytes int `json:"max_output_bytes"`
@@ -39,7 +46,9 @@ type Files struct {
 	MaxInlineBytes int64 `json:"max_inline_bytes"`
 }
 type Jobs struct {
-	MaxHistory int `json:"max_history"`
+	MaxHistory    int    `json:"max_history"`
+	MaxConcurrent int    `json:"max_concurrent"`
+	JournalPath   string `json:"journal_path"`
 }
 
 // QNAPAdapter binds a verified, NAS-local argv template to a named ecosystem
@@ -62,7 +71,8 @@ type Config struct {
 	Profile      string                 `json:"profile"`
 	Permissions  Permissions            `json:"permissions"`
 	Privacy      Privacy                `json:"privacy"`
-	Confirmation Confirmation           `json:"confirmation"`
+	Confirmation Confirmation           `json:"confirmation,omitempty"`
+	Approval     Approval               `json:"approval"`
 	Command      Command                `json:"command"`
 	Files        Files                  `json:"files"`
 	Jobs         Jobs                   `json:"jobs"`
@@ -85,14 +95,15 @@ type legacyConfig struct {
 
 func Defaults() Config {
 	return Config{
-		Version: 1, Listen: "127.0.0.1:8756", Profile: "observe",
+		Version: 2, Listen: "127.0.0.1:8756", Profile: "observe",
 		Auth:         Auth{Type: "bearer"},
 		Permissions:  Permissions{AllowedRoots: []string{"/share"}},
 		Privacy:      Privacy{RedactSecrets: true},
 		Confirmation: Confirmation{Mode: "destructive_only", TTLSeconds: 600},
+		Approval:     Approval{Mode: "sensitive_only", TTLSeconds: 600},
 		Command:      Command{TimeoutSeconds: 30, MaxOutputBytes: 8 * 1024 * 1024},
-		Files:        Files{MaxInlineBytes: 4 * 1024 * 1024}, Jobs: Jobs{MaxHistory: 200},
-		Audit:        Audit{Enabled: true, Path: "/var/log/qnap-ai-control-agent/audit.jsonl"},
+		Files:        Files{MaxInlineBytes: 4 * 1024 * 1024}, Jobs: Jobs{MaxHistory: 200, MaxConcurrent: 4, JournalPath: "/var/lib/qnap-ai-control-agent/jobs.jsonl"},
+		Audit:        Audit{Enabled: true, Path: "/var/log/qnap-ai-control-agent/audit.jsonl", RedactSecrets: boolPtr(true)},
 		DockerPaths:  defaultDockerPaths(),
 		QNAPAdapters: map[string]QNAPAdapter{},
 	}
@@ -104,9 +115,6 @@ func FullTrust(tokenHash string) Config {
 	cfg.Profile = "full_trust"
 	cfg.Auth.TokenSHA256 = tokenHash
 	cfg.Permissions = Permissions{AllowedRoots: []string{"/"}, AllowAnyCommand: true, AllowShell: true}
-	cfg.Privacy.RedactSecrets = false
-	cfg.Confirmation.Mode = "off"
-	cfg.Audit.RedactSecrets = boolPtr(false)
 	return cfg
 }
 
@@ -125,6 +133,19 @@ func Load(path string) (Config, error) {
 		if err := json.Unmarshal(b, &cfg); err != nil {
 			return Config{}, err
 		}
+		// v1 had confirmation but no independent approval policy. Every v1
+		// mode, including full_trust confirmation=off, migrates to the safe
+		// low-friction v2 default: only sensitive operations pause.
+		if _, hasApproval := raw["approval"]; !hasApproval {
+			cfg.Approval = Defaults().Approval
+			if cfg.Confirmation.TTLSeconds > 0 {
+				cfg.Approval.TTLSeconds = cfg.Confirmation.TTLSeconds
+			}
+			// v1 full_trust templates explicitly set this false. Preserve
+			// response privacy independently, but never carry that setting into
+			// the durable audit trail during the v2 migration.
+			cfg.Audit.RedactSecrets = boolPtr(true)
+		}
 	} else {
 		var old legacyConfig
 		if err := json.Unmarshal(b, &old); err != nil {
@@ -137,8 +158,8 @@ func Load(path string) (Config, error) {
 
 func Normalize(cfg Config) (Config, error) {
 	defaults := Defaults()
-	if cfg.Version == 0 {
-		cfg.Version = 1
+	if cfg.Version < 2 {
+		cfg.Version = 2
 	}
 	if cfg.Listen == "" {
 		cfg.Listen = defaults.Listen
@@ -164,8 +185,6 @@ func Normalize(cfg Config) (Config, error) {
 		cfg.Permissions.AllowedRoots = []string{"/"}
 		cfg.Permissions.AllowAnyCommand = true
 		cfg.Permissions.AllowShell = true
-		cfg.Privacy.RedactSecrets = false
-		cfg.Confirmation.Mode = "off"
 	}
 	cfg.Permissions.AllowedRoots = cleanPaths(cfg.Permissions.AllowedRoots)
 	if len(cfg.Permissions.AllowedRoots) == 0 {
@@ -183,6 +202,17 @@ func Normalize(cfg Config) (Config, error) {
 	if cfg.Confirmation.TTLSeconds <= 0 {
 		cfg.Confirmation.TTLSeconds = defaults.Confirmation.TTLSeconds
 	}
+	if cfg.Approval.Mode == "" {
+		cfg.Approval.Mode = defaults.Approval.Mode
+	}
+	switch cfg.Approval.Mode {
+	case "off", "sensitive_only", "all_write":
+	default:
+		return cfg, errors.New("approval.mode must be off, sensitive_only, or all_write")
+	}
+	if cfg.Approval.TTLSeconds <= 0 {
+		cfg.Approval.TTLSeconds = defaults.Approval.TTLSeconds
+	}
 	if cfg.Command.TimeoutSeconds <= 0 {
 		cfg.Command.TimeoutSeconds = defaults.Command.TimeoutSeconds
 	}
@@ -195,11 +225,20 @@ func Normalize(cfg Config) (Config, error) {
 	if cfg.Jobs.MaxHistory <= 0 {
 		cfg.Jobs.MaxHistory = defaults.Jobs.MaxHistory
 	}
+	if cfg.Jobs.MaxConcurrent <= 0 {
+		cfg.Jobs.MaxConcurrent = defaults.Jobs.MaxConcurrent
+	}
+	if cfg.Jobs.JournalPath == "" {
+		cfg.Jobs.JournalPath = defaults.Jobs.JournalPath
+	}
+	if !filepath.IsAbs(cfg.Jobs.JournalPath) {
+		return cfg, errors.New("jobs.journal_path must be absolute")
+	}
 	if cfg.Audit.Path == "" {
 		cfg.Audit.Path = defaults.Audit.Path
 	}
 	if cfg.Audit.RedactSecrets == nil {
-		cfg.Audit.RedactSecrets = boolPtr(cfg.Privacy.RedactSecrets)
+		cfg.Audit.RedactSecrets = boolPtr(true)
 	}
 	// Keep explicit paths first, then add new built-in Container Station paths
 	// on upgrades. Existing configs would otherwise never discover a wrapper

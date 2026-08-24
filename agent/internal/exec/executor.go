@@ -36,9 +36,10 @@ func (e Executor) Run(ctx context.Context, req Request) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
 	started := time.Now()
-	cmd := osexec.CommandContext(ctx, req.Argv[0], req.Argv[1:]...)
+	cmd := osexec.Command(req.Argv[0], req.Argv[1:]...)
 	cmd.Dir = req.CWD
 	cmd.Stdin = bytesReader(req.Stdin)
+	configureProcessGroup(cmd)
 	if len(req.Env) > 0 {
 		cmd.Env = os.Environ()
 		for key, value := range req.Env {
@@ -47,7 +48,21 @@ func (e Executor) Run(ctx context.Context, req Request) (Result, error) {
 	}
 	stdout, stderr := newLimitedBuffer(req.MaxOutput), newLimitedBuffer(req.MaxOutput)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
-	err := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		result.DurationMS = time.Since(started).Milliseconds()
+		if errors.Is(err, osexec.ErrNotFound) {
+			return result, &CommandError{Kind: NotFound, Result: result, Err: err}
+		}
+		return result, &CommandError{Kind: StartFailed, Result: result, Err: err}
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	var err error
+	select {
+	case err = <-done:
+	case <-ctx.Done():
+		err = terminateProcessGroup(cmd, done, 5*time.Second)
+	}
 	result.Stdout, result.Stderr, result.StdoutTruncated, result.StderrTruncated = stdout.String(), stderr.String(), stdout.truncated, stderr.truncated
 	result.DurationMS = time.Since(started).Milliseconds()
 	if err == nil {
@@ -55,6 +70,9 @@ func (e Executor) Run(ctx context.Context, req Request) (Result, error) {
 	}
 	if ctx.Err() == context.DeadlineExceeded {
 		return result, &CommandError{Kind: TimedOut, Result: result, Err: ctx.Err()}
+	}
+	if ctx.Err() == context.Canceled {
+		return result, &CommandError{Kind: Cancelled, Result: result, Err: context.Canceled}
 	}
 	var exitErr *osexec.ExitError
 	if errors.As(err, &exitErr) {

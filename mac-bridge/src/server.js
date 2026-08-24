@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { registerSystemTools } from "./tools/system.js";
 import { registerFileTools } from "./tools/files.js";
 import { registerDockerTools } from "./tools/docker.js";
@@ -14,4 +16,5 @@ export function createServer() {
   return server;
 }
 export async function main() { const server = createServer(); await server.connect(new StdioServerTransport()); }
-if (import.meta.url === `file://${process.argv[1]}`) main().catch((error) => { console.error(error.stack || error.message); process.exitCode = 1; });
+const invokedPath = process.argv[1] ? resolve(process.argv[1]) : "";
+if (invokedPath && invokedPath === fileURLToPath(import.meta.url)) main().catch((error) => { console.error(error.stack || error.message); process.exitCode = 1; });

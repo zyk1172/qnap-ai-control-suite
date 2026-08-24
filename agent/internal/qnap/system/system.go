@@ -48,11 +48,56 @@ type Mount struct {
 	ReadOnly   bool   `json:"read_only"`
 }
 type Process struct {
-	PID     int    `json:"pid"`
-	User    string `json:"user,omitempty"`
-	State   string `json:"state,omitempty"`
-	Command string `json:"command,omitempty"`
-	PPID    int    `json:"ppid,omitempty"`
+	PID     int           `json:"pid"`
+	User    string        `json:"user,omitempty"`
+	State   string        `json:"state,omitempty"`
+	Command string        `json:"command,omitempty"`
+	PPID    int           `json:"ppid,omitempty"`
+	CPU     ProcessCPU    `json:"cpu"`
+	Memory  ProcessMemory `json:"memory"`
+	IO      ProcessIO     `json:"io"`
+}
+
+// ProcessCPU contains cumulative CPU time exported by /proc/<pid>/stat.
+// Percent is deliberately nil for the ordinary process-list request: a
+// percentage requires two samples separated by a known interval, and this
+// service does not invent one from a single cumulative snapshot.
+type ProcessCPU struct {
+	UserJiffies        uint64   `json:"user_jiffies"`
+	SystemJiffies      uint64   `json:"system_jiffies"`
+	TotalJiffies       uint64   `json:"total_jiffies"`
+	ChildUserJiffies   uint64   `json:"child_user_jiffies,omitempty"`
+	ChildSystemJiffies uint64   `json:"child_system_jiffies,omitempty"`
+	TimeBasis          string   `json:"time_basis"`
+	Percent            *float64 `json:"percent"`
+	PercentStatus      string   `json:"percent_status"`
+}
+
+// ProcessMemory contains byte counters from /proc/<pid>/status and the RSS
+// page count in /proc/<pid>/stat as a compatibility fallback.
+type ProcessMemory struct {
+	Available     bool   `json:"available"`
+	VirtualBytes  uint64 `json:"virtual_bytes"`
+	RSSBytes      uint64 `json:"rss_bytes"`
+	PeakRSSBytes  uint64 `json:"peak_rss_bytes"`
+	RSSAnonBytes  uint64 `json:"rss_anon_bytes"`
+	RSSFileBytes  uint64 `json:"rss_file_bytes"`
+	RSSShmemBytes uint64 `json:"rss_shmem_bytes"`
+	SwapBytes     uint64 `json:"swap_bytes"`
+}
+
+// ProcessIO contains the counters exposed by /proc/<pid>/io. The counters
+// are cumulative for the process lifetime and may be unavailable when the
+// kernel or the process permissions do not expose that file.
+type ProcessIO struct {
+	Available           bool   `json:"available"`
+	ReadCharsBytes      uint64 `json:"read_chars_bytes"`
+	WriteCharsBytes     uint64 `json:"write_chars_bytes"`
+	ReadSyscalls        uint64 `json:"read_syscalls"`
+	WriteSyscalls       uint64 `json:"write_syscalls"`
+	ReadBytes           uint64 `json:"read_bytes"`
+	WriteBytes          uint64 `json:"write_bytes"`
+	CancelledWriteBytes uint64 `json:"cancelled_write_bytes"`
 }
 type Unit struct {
 	Name    string `json:"name"`
@@ -212,6 +257,7 @@ func readProcesses(root string, users map[string]string) ([]Process, error) {
 		return nil, err
 	}
 	out := []Process{}
+	pageSize := uint64(os.Getpagesize())
 	for _, entry := range entries {
 		if !entry.IsDir() || !isNumeric(entry.Name()) {
 			continue
@@ -225,33 +271,96 @@ func readProcesses(root string, users map[string]string) ([]Process, error) {
 		if statErr != nil {
 			continue
 		}
-		comm, state, ppid := parseProcStat(string(statBytes))
+		stat := parseProcStatDetails(string(statBytes))
 		cmdline, _ := os.ReadFile(filepath.Join(base, "cmdline"))
 		status, _ := os.ReadFile(filepath.Join(base, "status"))
+		ioBytes, _ := os.ReadFile(filepath.Join(base, "io"))
 		out = append(out, Process{
 			PID:     pid,
-			PPID:    ppid,
-			State:   state,
+			PPID:    stat.PPID,
+			State:   stat.State,
 			User:    processUser(string(status), users),
-			Command: processCommand(comm, string(cmdline)),
+			Command: processCommand(stat.Comm, string(cmdline)),
+			CPU: ProcessCPU{
+				UserJiffies:        stat.UserJiffies,
+				SystemJiffies:      stat.SystemJiffies,
+				TotalJiffies:       saturatingAddUint64(stat.UserJiffies, stat.SystemJiffies),
+				ChildUserJiffies:   stat.ChildUserJiffies,
+				ChildSystemJiffies: stat.ChildSystemJiffies,
+				TimeBasis:          "cumulative",
+				PercentStatus:      "unavailable_no_sample",
+			},
+			Memory: parseProcessMemory(string(status), stat.RSSPages, stat.VirtualBytes, pageSize),
+			IO:     parseProcessIO(string(ioBytes)),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].PID < out[j].PID })
 	return out, nil
 }
 func parseProcStat(raw string) (comm, state string, ppid int) {
+	stat := parseProcStatDetails(raw)
+	return stat.Comm, stat.State, stat.PPID
+}
+
+type procStat struct {
+	Comm               string
+	State              string
+	PPID               int
+	UserJiffies        uint64
+	SystemJiffies      uint64
+	ChildUserJiffies   uint64
+	ChildSystemJiffies uint64
+	VirtualBytes       uint64
+	RSSPages           int64
+}
+
+func parseProcStatDetails(raw string) procStat {
+	stat := procStat{RSSPages: -1}
 	start := strings.Index(raw, "(")
 	end := strings.LastIndex(raw, ")")
 	if start < 0 || end < 0 || end <= start {
-		return "", "", 0
+		return stat
 	}
-	comm = strings.TrimSpace(raw[start+1 : end])
+	stat.Comm = strings.TrimSpace(raw[start+1 : end])
 	fields := strings.Fields(raw[end+1:])
-	if len(fields) >= 2 {
-		state = fields[0]
-		ppid, _ = strconv.Atoi(fields[1])
+	if len(fields) < 2 {
+		return stat
 	}
-	return comm, state, ppid
+	stat.State = fields[0]
+	stat.PPID, _ = strconv.Atoi(fields[1])
+	stat.UserJiffies = parseProcUintField(fields, 14)
+	stat.SystemJiffies = parseProcUintField(fields, 15)
+	stat.ChildUserJiffies = parseProcUintField(fields, 16)
+	stat.ChildSystemJiffies = parseProcUintField(fields, 17)
+	stat.VirtualBytes = parseProcUintField(fields, 23)
+	stat.RSSPages = parseProcIntField(fields, 24, -1)
+	return stat
+}
+
+// Fields after the closing comm parenthesis start at /proc stat field 3
+// (state), so field N is stored at index N-3.
+func parseProcUintField(fields []string, field int) uint64 {
+	index := field - 3
+	if index < 0 || index >= len(fields) {
+		return 0
+	}
+	value, err := strconv.ParseUint(fields[index], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return value
+}
+
+func parseProcIntField(fields []string, field int, fallback int64) int64 {
+	index := field - 3
+	if index < 0 || index >= len(fields) {
+		return fallback
+	}
+	value, err := strconv.ParseInt(fields[index], 10, 64)
+	if err != nil {
+		return fallback
+	}
+	return value
 }
 func processUser(status string, users map[string]string) string {
 	for _, line := range strings.Split(status, "\n") {
@@ -278,6 +387,140 @@ func processCommand(comm, cmdline string) string {
 	}
 	return ""
 }
+
+func parseProcessMemory(status string, rssPages int64, virtualBytes, pageSize uint64) ProcessMemory {
+	memory := ProcessMemory{}
+	var hasVirtual, hasRSS, hasMetric bool
+	for _, line := range strings.Split(status, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		key := strings.TrimSuffix(fields[0], ":")
+		value, ok := parseProcMemoryValue(fields[1:])
+		if !ok {
+			continue
+		}
+		switch key {
+		case "VmSize":
+			memory.VirtualBytes = value
+			hasVirtual = true
+			hasMetric = true
+		case "VmHWM":
+			memory.PeakRSSBytes = value
+			hasMetric = true
+		case "VmRSS":
+			memory.RSSBytes = value
+			hasRSS = true
+			hasMetric = true
+		case "RssAnon":
+			memory.RSSAnonBytes = value
+			hasMetric = true
+		case "RssFile":
+			memory.RSSFileBytes = value
+			hasMetric = true
+		case "RssShmem":
+			memory.RSSShmemBytes = value
+			hasMetric = true
+		case "VmSwap":
+			memory.SwapBytes = value
+			hasMetric = true
+		}
+	}
+
+	// Older or reduced QNAP kernels may omit VmRSS/VmSize from status while
+	// still exposing the stat fields. Keep the fallback explicit and in bytes.
+	if !hasVirtual && virtualBytes > 0 {
+		memory.VirtualBytes = virtualBytes
+		hasVirtual = true
+		hasMetric = true
+	}
+	if !hasRSS && rssPages >= 0 && pageSize > 0 {
+		memory.RSSBytes = saturatingMulUint64(uint64(rssPages), pageSize)
+		hasRSS = true
+		hasMetric = true
+	}
+	memory.Available = hasMetric
+	return memory
+}
+
+func parseProcMemoryValue(fields []string) (uint64, bool) {
+	if len(fields) == 0 {
+		return 0, false
+	}
+	value, err := strconv.ParseUint(fields[0], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	multiplier := uint64(1)
+	if len(fields) >= 2 {
+		switch strings.ToLower(fields[1]) {
+		case "b":
+			multiplier = 1
+		case "kb":
+			multiplier = 1024
+		case "mb":
+			multiplier = 1024 * 1024
+		case "gb":
+			multiplier = 1024 * 1024 * 1024
+		default:
+			return 0, false
+		}
+	}
+	if value > ^uint64(0)/multiplier {
+		return 0, false
+	}
+	return value * multiplier, true
+}
+
+func saturatingAddUint64(left, right uint64) uint64 {
+	if ^uint64(0)-left < right {
+		return ^uint64(0)
+	}
+	return left + right
+}
+
+func saturatingMulUint64(left, right uint64) uint64 {
+	if left != 0 && right > ^uint64(0)/left {
+		return ^uint64(0)
+	}
+	return left * right
+}
+
+func parseProcessIO(raw string) ProcessIO {
+	ioCounters := ProcessIO{}
+	for _, line := range strings.Split(raw, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		value, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			continue
+		}
+		switch strings.TrimSuffix(fields[0], ":") {
+		case "rchar":
+			ioCounters.ReadCharsBytes = value
+		case "wchar":
+			ioCounters.WriteCharsBytes = value
+		case "syscr":
+			ioCounters.ReadSyscalls = value
+		case "syscw":
+			ioCounters.WriteSyscalls = value
+		case "read_bytes":
+			ioCounters.ReadBytes = value
+		case "write_bytes":
+			ioCounters.WriteBytes = value
+		case "cancelled_write_bytes":
+			ioCounters.CancelledWriteBytes = value
+		default:
+			continue
+		}
+		ioCounters.Available = true
+	}
+	return ioCounters
+}
+
 func isNumeric(value string) bool {
 	_, err := strconv.Atoi(value)
 	return err == nil

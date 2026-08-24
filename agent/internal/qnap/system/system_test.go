@@ -1,6 +1,7 @@
 package system
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -54,6 +55,75 @@ func TestReadProcessesFromProcIgnoresBusyboxPSFormat(t *testing.T) {
 	}
 	if len(items) != 2 || items[0].PID != 1 || items[0].User != "root" || items[0].Command != "[init]" || items[1].PID != 42 || items[1].PPID != 1 || items[1].User != "admin" || !strings.Contains(items[1].Command, "-config") {
 		t.Fatalf("unexpected processes: %#v", items)
+	}
+}
+
+func TestReadProcessesParsesProcResourceCountersWithoutInventingCPUPercent(t *testing.T) {
+	items, err := readProcesses(filepath.Join("testdata", "proc"), map[string]string{"1000": "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected one process, got %#v", items)
+	}
+	item := items[0]
+	if item.CPU.UserJiffies != 123 || item.CPU.SystemJiffies != 45 || item.CPU.TotalJiffies != 168 || item.CPU.ChildUserJiffies != 6 || item.CPU.ChildSystemJiffies != 7 {
+		t.Fatalf("unexpected CPU counters: %#v", item.CPU)
+	}
+	if item.CPU.TimeBasis != "cumulative" || item.CPU.Percent != nil || item.CPU.PercentStatus != "unavailable_no_sample" {
+		t.Fatalf("CPU percent must be explicitly unavailable without a sample window: %#v", item.CPU)
+	}
+	encodedCPU, err := json.Marshal(item.CPU)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encodedCPU), `"percent":null`) || !strings.Contains(string(encodedCPU), `"percent_status":"unavailable_no_sample"`) {
+		t.Fatalf("CPU JSON must expose unavailable percentage explicitly: %s", encodedCPU)
+	}
+	if !item.Memory.Available || item.Memory.VirtualBytes != 16*1024 || item.Memory.RSSBytes != 8*1024 || item.Memory.PeakRSSBytes != 12*1024 || item.Memory.RSSAnonBytes != 4*1024 || item.Memory.RSSFileBytes != 2*1024 || item.Memory.RSSShmemBytes != 2*1024 || item.Memory.SwapBytes != 1024 {
+		t.Fatalf("unexpected memory counters: %#v", item.Memory)
+	}
+	if !item.IO.Available || item.IO.ReadCharsBytes != 100 || item.IO.WriteCharsBytes != 200 || item.IO.ReadSyscalls != 3 || item.IO.WriteSyscalls != 4 || item.IO.ReadBytes != 50 || item.IO.WriteBytes != 60 || item.IO.CancelledWriteBytes != 7 {
+		t.Fatalf("unexpected I/O counters: %#v", item.IO)
+	}
+}
+
+func TestParseProcessMemoryFallsBackToProcStatRSS(t *testing.T) {
+	memory := parseProcessMemory("Name:\tworker\n", 3, 8192, 4096)
+	if !memory.Available || memory.VirtualBytes != 8192 || memory.RSSBytes != 3*4096 {
+		t.Fatalf("unexpected /proc stat memory fallback: %#v", memory)
+	}
+	virtualOnly := parseProcessMemory("Name:\tworker\n", -1, 8192, 4096)
+	if !virtualOnly.Available || virtualOnly.VirtualBytes != 8192 || virtualOnly.RSSBytes != 0 {
+		t.Fatalf("virtual memory fallback should be reported independently: %#v", virtualOnly)
+	}
+}
+
+func TestParseProcessIOMarksMissingProcIOUnavailable(t *testing.T) {
+	ioCounters := parseProcessIO("rchar: not-a-number\nunknown: 10\n")
+	if ioCounters.Available {
+		t.Fatalf("malformed or unknown I/O fields must remain unavailable: %#v", ioCounters)
+	}
+}
+
+func TestParseProcMemoryValueRejectsUnknownUnitAndOverflow(t *testing.T) {
+	if value, ok := parseProcMemoryValue([]string{"2", "kB"}); !ok || value != 2*1024 {
+		t.Fatalf("expected kB conversion, got value=%d ok=%t", value, ok)
+	}
+	if _, ok := parseProcMemoryValue([]string{"2", "pages"}); ok {
+		t.Fatal("unknown memory units must not be interpreted as bytes")
+	}
+	if _, ok := parseProcMemoryValue([]string{"18446744073709551615", "kB"}); ok {
+		t.Fatal("overflowing memory conversion must be rejected")
+	}
+}
+
+func TestProcessCountersSaturateOnUint64Overflow(t *testing.T) {
+	if got := saturatingAddUint64(^uint64(0)-1, 2); got != ^uint64(0) {
+		t.Fatalf("unexpected saturated sum: %d", got)
+	}
+	if got := saturatingMulUint64(^uint64(0), 2); got != ^uint64(0) {
+		t.Fatalf("unexpected saturated product: %d", got)
 	}
 }
 

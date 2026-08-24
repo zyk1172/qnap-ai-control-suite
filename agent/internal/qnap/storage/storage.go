@@ -19,6 +19,7 @@ import (
 type Service struct {
 	Exec         qexec.Executor
 	SysBlockRoot string
+	ProcRoot     string
 }
 type Disk struct {
 	ID             string         `json:"id"`
@@ -32,6 +33,7 @@ type Disk struct {
 	Rotational     bool           `json:"rotational"`
 	Temperature    *float64       `json:"temperature,omitempty"`
 	SmartSupported bool           `json:"smart_supported"`
+	IO             *DiskIOMetrics `json:"io,omitempty"`
 	Raw            map[string]any `json:"raw"`
 }
 type RAID struct {
@@ -196,20 +198,28 @@ func looksLikeQCLIHeader(fields []string) bool {
 }
 
 func (s Service) Disks() ([]Disk, error) {
-	entries, err := os.ReadDir("/sys/block")
+	root := s.sysBlockRoot()
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, err
 	}
+	ioByName, ioErr := s.DiskIO()
 	out := []Disk{}
 	for _, e := range entries {
 		name := e.Name()
 		if !(strings.HasPrefix(name, "sd") || strings.HasPrefix(name, "nvme") || strings.HasPrefix(name, "vd")) {
 			continue
 		}
-		base := filepath.Join("/sys/block", name)
+		base := filepath.Join(root, name)
 		sectors, _ := strconv.ParseUint(read(base, "size"), 10, 64)
 		rot := read(base, "queue/rotational") == "1"
-		d := Disk{ID: name, Name: name, Path: "/dev/" + name, Model: read(base, "device/model"), Serial: read(base, "device/serial"), Firmware: read(base, "device/firmware_rev"), SizeBytes: sectors * 512, Rotational: rot, Transport: transport(name), Raw: map[string]any{"sysfs": base}}
+		d := Disk{ID: name, Name: name, Path: "/dev/" + name, Model: read(base, "device/model"), Serial: read(base, "device/serial"), Firmware: read(base, "device/firmware_rev"), SizeBytes: sectors * 512, Rotational: rot, Transport: transport(name), SmartSupported: sysfsSmartSupported(base), Raw: map[string]any{"sysfs": base}}
+		if metrics, ok := ioByName[name]; ok {
+			metricsCopy := metrics
+			d.IO = &metricsCopy
+		} else if ioErr != nil {
+			d.Raw["diskstats_error"] = ioErr.Error()
+		}
 		out = append(out, d)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -238,18 +248,35 @@ func (s Service) Smart(ctx context.Context, id string) (map[string]any, error) {
 			"supported": false,
 			"reason":    "smartctl not installed; checked /sbin, /usr/sbin, /usr/bin, /bin, /usr/local/sbin, /usr/local/bin",
 			"disk":      d,
-			"fallback":  smartSysfsFallback(d),
+			"summary":   SMARTSummary{Available: false, Supported: false, Reason: "smartctl is not installed"},
+			"fallback":  s.smartSysfsFallback(d),
 		}, nil
 	}
 	result, err := s.Exec.Run(ctx, qexec.Request{Argv: []string{path, "-j", "-a", d.Path}, Timeout: 45 * time.Second, MaxOutput: s.Exec.MaxOutput})
-	if err != nil {
-		return map[string]any{"disk": d, "command": result}, err
-	}
 	var raw map[string]any
-	if err := json.Unmarshal([]byte(result.Stdout), &raw); err != nil {
-		return map[string]any{"disk": d, "command": result}, err
+	if parseErr := json.Unmarshal([]byte(result.Stdout), &raw); parseErr != nil {
+		if err != nil {
+			return map[string]any{"disk": d, "command": result}, err
+		}
+		return map[string]any{"disk": d, "command": result}, parseErr
 	}
-	return map[string]any{"supported": true, "disk": d, "raw": raw}, nil
+	summary := ParseSMARTSummary(raw)
+	response := map[string]any{
+		// Keep the existing top-level meaning: smartctl returned structured data.
+		// The device-level SMART capability is exposed in summary/smart_supported.
+		"supported":       true,
+		"smart_supported": summary.Supported,
+		"disk":            d,
+		"summary":         summary,
+		"raw":             raw,
+	}
+	if err != nil {
+		// smartctl uses non-zero exit statuses for a number of useful, parseable
+		// conditions (for example a failed health check or an unsupported field).
+		// Preserve the structured response and make the command status explicit.
+		response["command_error"] = err.Error()
+	}
+	return response, nil
 }
 func (s Service) StartSmart(ctx context.Context, id, kind string) (qexec.Result, error) {
 	if kind != "short" && kind != "long" {
@@ -525,6 +552,18 @@ func read(base, name string) string {
 	}
 	return strings.TrimSpace(string(b))
 }
+func (s Service) sysBlockRoot() string {
+	if s.SysBlockRoot != "" {
+		return s.SysBlockRoot
+	}
+	return "/sys/block"
+}
+func (s Service) procRoot() string {
+	if s.ProcRoot != "" {
+		return s.ProcRoot
+	}
+	return "/proc"
+}
 func transport(name string) string {
 	if strings.HasPrefix(name, "nvme") {
 		return "nvme"
@@ -560,15 +599,19 @@ func executable(paths []string) string {
 	}
 	return ""
 }
-func smartSysfsFallback(d Disk) map[string]any {
+func (s Service) smartSysfsFallback(d Disk) map[string]any {
 	attrs := map[string]any{}
-	base := filepath.Join("/sys/block", d.ID)
+	base := filepath.Join(s.sysBlockRoot(), d.ID)
 	for _, name := range []string{"device/state", "device/queue_depth", "device/wwid", "queue/scheduler"} {
 		if value := read(base, name); value != "" {
 			attrs[name] = value
 		}
 	}
-	return map[string]any{"note": "smartctl is not installed; sysfs attributes only", "sysfs": attrs}
+	return map[string]any{
+		"summary": SMARTSummary{Available: false, Supported: false, Reason: "smartctl is not installed; sysfs attributes only"},
+		"note":    "smartctl is not installed; sysfs attributes only",
+		"sysfs":   attrs,
+	}
 }
 func volumeBackend(fs string) string {
 	if fs == "zfs" {
