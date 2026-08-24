@@ -103,7 +103,7 @@ func TestInterfaceCountersReadPartialSysfs(t *testing.T) {
 		t.Fatalf("counters=%+v want=%+v", got, want)
 	}
 
-	missing := (Service{SysClassNetRoot: t.TempDir()}).interfaceCounters("eth0")
+	missing := (Service{ProcRoot: t.TempDir(), SysClassNetRoot: t.TempDir()}).interfaceCounters("eth0")
 	if missing.Available || missing.RXBytes != 0 || missing.TXDropped != 0 {
 		t.Fatalf("missing counters should be unavailable and zero: %+v", missing)
 	}

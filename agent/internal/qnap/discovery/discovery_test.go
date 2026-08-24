@@ -80,6 +80,7 @@ func TestDiscoverMarksSchedulerCapabilitiesUnavailableWithoutEvidence(t *testing
 	root := t.TempDir()
 	procRoot := filepath.Join(root, "proc")
 	etcRoot := filepath.Join(root, "etc")
+	varRoot := filepath.Join(root, "var")
 	binRoot := filepath.Join(root, "bin")
 	if err := os.MkdirAll(filepath.Join(procRoot, "1"), 0755); err != nil {
 		t.Fatal(err)
@@ -92,7 +93,7 @@ func TestDiscoverMarksSchedulerCapabilitiesUnavailableWithoutEvidence(t *testing
 	}
 	writeDiscoveryFile(t, filepath.Join(procRoot, "1", "comm"), "init\n", 0644)
 
-	result := (Service{ProcRoot: procRoot, EtcRoot: etcRoot, UtilityPaths: []string{binRoot}}).Discover(context.Background())
+	result := (Service{ProcRoot: procRoot, EtcRoot: etcRoot, VarRoot: varRoot, UtilityPaths: []string{binRoot}}).Discover(context.Background())
 	for _, name := range []string{"scheduler", "cron", "systemd_timers", "scheduled_tasks"} {
 		feature := result.Features[name]
 		if feature.Supported || !feature.ReadOnly || !strings.Contains(feature.Reason, "capability unavailable") {
