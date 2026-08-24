@@ -12,13 +12,25 @@ JOBDIR=/var/lib/qnap-ai-control-agent
 STDOUT_LOG="$LOGDIR/service.log"
 
 ensure_config() {
-  mkdir -p "$CONFIG_DIR" "$LOGDIR" "$JOBDIR"
-  chmod 700 "$JOBDIR"
+  if ! mkdir -p "$CONFIG_DIR" "$LOGDIR" "$JOBDIR"; then
+    echo "cannot create QNAP AI Control state directories" >&2
+    return 1
+  fi
+  if ! chmod 700 "$CONFIG_DIR" "$JOBDIR"; then
+    echo "cannot secure QNAP AI Control state directories" >&2
+    return 1
+  fi
   if [ ! -f "$CONFIG" ]; then
-    TOKEN=$("$BIN" -generate-token)
-    HASH=$(printf "%s" "$TOKEN" | "$BIN" -print-token-hash)
+    TOKEN=$("$BIN" -generate-token) || {
+      echo "cannot generate initial bearer token" >&2
+      return 1
+    }
+    HASH=$(printf "%s" "$TOKEN" | "$BIN" -print-token-hash) || {
+      echo "cannot hash initial bearer token" >&2
+      return 1
+    }
     umask 077
-    cat > "$CONFIG" <<EOF
+    if ! cat > "$CONFIG" <<EOF
 {
   "version": 2,
   "listen": "0.0.0.0:8756",
@@ -48,10 +60,40 @@ ensure_config() {
   ]
 }
 EOF
-    cat > "$CONFIG_DIR/initial-token.txt" <<EOF
-$TOKEN
-EOF
-    chmod 600 "$CONFIG" "$CONFIG_DIR/initial-token.txt"
+    then
+      echo "cannot write agent configuration" >&2
+      return 1
+    fi
+    if ! printf '%s\n' "$TOKEN" > "$CONFIG_DIR/.token.install.tmp"; then
+      echo "cannot write bearer token file" >&2
+      rm -f "$CONFIG" "$CONFIG_DIR/.token.install.tmp"
+      return 1
+    fi
+    if ! chmod 600 "$CONFIG_DIR/.token.install.tmp"; then
+      echo "cannot secure bearer token files" >&2
+      rm -f "$CONFIG" "$CONFIG_DIR/.token.install.tmp"
+      return 1
+    fi
+    if ! mv "$CONFIG_DIR/.token.install.tmp" "$CONFIG_DIR/token"; then
+      echo "cannot commit bearer token file" >&2
+      rm -f "$CONFIG" "$CONFIG_DIR/.token.install.tmp"
+      return 1
+    fi
+  fi
+  if [ -f "$CONFIG" ] && ! chmod 600 "$CONFIG"; then
+    echo "cannot secure agent configuration" >&2
+    return 1
+  fi
+  if [ -f "$CONFIG_DIR/token" ] && ! chmod 600 "$CONFIG_DIR/token"; then
+    echo "cannot secure bearer token file" >&2
+    return 1
+  fi
+  # The Go TokenStore validates initial-token.txt against config.json before
+  # migrating it. The service script only tightens its file mode; it never
+  # copies legacy plaintext into the canonical token path.
+  if [ -f "$CONFIG_DIR/initial-token.txt" ] && ! chmod 600 "$CONFIG_DIR/initial-token.txt"; then
+    echo "cannot secure legacy bearer token file" >&2
+    return 1
   fi
 }
 
@@ -86,7 +128,10 @@ stop_stale_agents() {
 }
 
 start() {
-  ensure_config
+  if ! ensure_config; then
+    echo "$QPKG_NAME could not prepare writable configuration" >&2
+    exit 1
+  fi
   if [ -f "$PIDFILE" ]; then
     PID=$(cat "$PIDFILE")
     if agent_pid_running "$PID"; then

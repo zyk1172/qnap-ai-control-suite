@@ -1,6 +1,6 @@
 # MCP Client 配置
 
-Mac 上安装 Node 20+，然后在 Codex、OpenClaw 或 Hermes 中加入：
+Mac 上安装 Node 20+，并让 Codex、OpenClaw、Hermes 或其他 MCP client 指向同一份 `mac-bridge/src/server.js`。WebUI 的“接入”页可以根据客户端选择生成配置；下面是脱敏模板，真实 Token 只从 WebUI 当前页面复制，不要提交 Git。
 
 ```json
 {
@@ -10,28 +10,31 @@ Mac 上安装 Node 20+，然后在 Codex、OpenClaw 或 Hermes 中加入：
       "args": ["/path/to/qnap-ai-control-suite/mac-bridge/src/server.js"],
       "env": {
         "QACS_BASE_URL": "http://NAS_IP:8756",
-        "QACS_TOKEN": "REPLACE_WITH_TOKEN"
+        "QACS_TOKEN": "CURRENT_TOKEN",
+        "QACS_TOOLSETS": "core,files,docker,storage,network,qnap,admin"
       }
     }
   }
 }
 ```
 
-不要将真实 `QACS_TOKEN` 放入 Git 配置、截图或公共日志。旧配置中的 `mcp-server.js` 可继续使用。
+Codex 使用 TOML `[mcp_servers.qnap-ai-control]`，Hermes 使用 YAML `mcp_servers`，OpenClaw 使用 `mcp.servers` 的 JSON5/JSON 配置。项目不会假设这三者可以直接复用通用 JSON；请使用 WebUI 为对应客户端生成的语法，并以各客户端当前文档为准：[Codex MCP 配置](https://github.com/openai/codex/blob/main/codex-rs/config/src/mcp_edit.rs)、[Hermes MCP 配置参考](https://hermes-agent.nousresearch.com/docs/reference/mcp-config-reference/)、[OpenClaw 配置参考](https://docs.openclaw.ai/gateway/configuration-reference)。
+
+不要将真实 `QACS_TOKEN` 放入 Git 配置、截图或公共日志。旧配置中的 `mcp-server.js` 可继续使用，但新配置建议指向 `server.js`。
 
 ## 更新已安装的客户端
 
-如果某个智能体已经安装过本 MCP，NAS 更新后不需要改 MCP 协议配置，但需要让该智能体使用当前版本的 Mac bridge：
+如果某个智能体已经安装过本 MCP，NAS 更新后不需要重新发现 NAS 端路由，但需要让该智能体使用当前版本的 Mac bridge：
 
-1. 更新 Mac 上的仓库到 v2.0.0 分支或发布版本：
+1. 更新 Mac 上的仓库到 v2.1.0 分支或发布版本：
 
    ```bash
    cd /path/to/qnap-ai-control-suite
    git fetch origin
-   git checkout codex/v2-agent-native-control-plane
+   git checkout codex/v2.1-webui-token-management
    git pull
    cd mac-bridge
-   npm install
+   npm ci --ignore-scripts --no-audit --no-fund
    ```
 
 2. 确认该智能体的 MCP 配置仍指向同一目录下的 `mac-bridge/src/server.js` 或 `mac-bridge/src/mcp-server.js`，不要继续指向旧目录里复制出来的旧 bridge。
@@ -40,8 +43,8 @@ Mac 上安装 Node 20+，然后在 Codex、OpenClaw 或 Hermes 中加入：
 
 4. 验证顺序：
 
-   1. `nas_health`，确认返回 `"version":"2.0.0"`。
-   2. `nas_process_list`，确认不再返回空数组。
+   1. `nas_health`，确认返回当前 Agent 版本。
+   2. `nas_status_snapshot`，确认返回当前 Agent 状态。
    3. `nas_service_list`，确认返回 QNAP QPKG 服务列表。
    4. `nas_acl_get`，确认能读取 ACL 或返回 stat fallback。
    5. `nas_qnap_ecosystem`，确认 UPS reason 与状态一致。
@@ -62,7 +65,7 @@ Bridge 对 Hermes 式 `action=accept` + 空 `content` 兼容为“允许这一�
 
 审批交互默认最多等待 300 秒，并按 NAS ticket 的剩余有效期裁剪；可通过 `QACS_APPROVAL_TIMEOUT_MS` 调整，Bridge 会将其限制在 9 分钟以内。
 
-当前仓库固定使用已验证的 `@modelcontextprotocol/sdk@1.30.0`。它协商支持的 2025 MCP protocol versions；对尚未被该 SDK 识别的未来版本会按 SDK 行为回落到当前支持的版本，不宣称提供未验证的 2026 专属协议能力。Bridge 的审批闭环只依赖已验证的标准 form-mode elicitation。
+当前仓库固定使用已验证的 `@modelcontextprotocol/sdk@1.30.0`。不要把尚未在当前 lockfile 验证过的 SDK 版本写入客户端配置。Bridge 兼容 2025-era form elicitation，包括裸 `elicitation: {}`；Hermes 式 `action=accept` + 空 `content` 解释为允许一次，`decline`/`cancel` 永远优先表示拒绝。Bridge 的审批闭环只依赖已验证的标准 elicitation 路径。
 
 ## 长任务与 Job
 

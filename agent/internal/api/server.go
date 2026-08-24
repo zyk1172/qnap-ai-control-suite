@@ -3,8 +3,6 @@ package api
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -18,11 +16,13 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"qnap-ai-control-suite/agent/internal/approval"
 	"qnap-ai-control-suite/agent/internal/audit"
+	"qnap-ai-control-suite/agent/internal/auth"
 	"qnap-ai-control-suite/agent/internal/config"
 	qexec "qnap-ai-control-suite/agent/internal/exec"
 	"qnap-ai-control-suite/agent/internal/files"
@@ -41,26 +41,31 @@ import (
 )
 
 type Server struct {
-	Config     config.Config
-	Exec       qexec.Executor
-	Files      files.Service
-	Jobs       *jobs.Manager
-	Audit      *audit.Logger
-	Operations operations.Registry
-	Approvals  *approval.Manager
-	Docker     docker.Service
-	QPKG       qpkg.Service
-	Discovery  discovery.Service
-	System     qsystem.Service
-	Network    qnetwork.Service
-	Storage    storage.Service
-	Users      users.Service
-	Shares     shares.Service
-	Logs       logs.Service
-	Ecosystem  ecosystem.Service
-	ProbePath  string
-	started    time.Time
-	hostname   string
+	Config          config.Config
+	Auth            *auth.AuthManager
+	TokenStore      *auth.TokenStore
+	ConfigPath      string
+	Exec            qexec.Executor
+	Files           files.Service
+	Jobs            *jobs.Manager
+	Audit           *audit.Logger
+	Operations      operations.Registry
+	Approvals       *approval.Manager
+	Docker          docker.Service
+	QPKG            qpkg.Service
+	Discovery       discovery.Service
+	System          qsystem.Service
+	Network         qnetwork.Service
+	Storage         storage.Service
+	Users           users.Service
+	Shares          shares.Service
+	Logs            logs.Service
+	Ecosystem       ecosystem.Service
+	ProbePath       string
+	started         time.Time
+	hostname        string
+	tokenRotationMu sync.Mutex
+	thermalRun      func(context.Context, qexec.Request) (qexec.Result, error)
 }
 
 // Version is injected by scripts/build_agent.sh from the repository VERSION file.
@@ -93,8 +98,18 @@ func New(cfg config.Config) *Server {
 	if cfg.Audit.RedactSecrets != nil {
 		auditRedaction = *cfg.Audit.RedactSecrets
 	}
-	server := &Server{Config: cfg, Exec: executor, Files: files.Service{Roots: cfg.Permissions.AllowedRoots, MaxInlineBytes: cfg.Files.MaxInlineBytes}, Audit: &audit.Logger{Enabled: cfg.Audit.Enabled, Path: cfg.Audit.Path, RedactSecrets: auditRedaction}, Operations: operations.New(), Approvals: approval.New(time.Duration(cfg.Approval.TTLSeconds) * time.Second), Docker: docker.Service{Exec: executor, Paths: cfg.DockerPaths, RedactSecrets: cfg.Privacy.RedactSecrets}, QPKG: qpkg.Service{Exec: executor}, Discovery: discovery.Service{Exec: executor}, System: qsystem.Service{Exec: executor}, Network: qnetwork.Service{Exec: executor}, Storage: storage.Service{Exec: executor}, Users: users.Service{Exec: executor}, Shares: shares.Service{Exec: executor}, Logs: logs.Service{AuditPath: cfg.Audit.Path, ServicePath: "/var/log/qnap-ai-control-agent/service.log"}, Ecosystem: ecosystem.Service{Discovery: discovery.Service{Exec: executor}, Exec: executor, Adapters: cfg.QNAPAdapters}, ProbePath: defaultProbePath(), started: time.Now(), hostname: host}
+	server := &Server{Config: cfg, Auth: auth.NewAuthManager(cfg.Auth.TokenSHA256), Exec: executor, Files: files.Service{Roots: cfg.Permissions.AllowedRoots, MaxInlineBytes: cfg.Files.MaxInlineBytes}, Audit: &audit.Logger{Enabled: cfg.Audit.Enabled, Path: cfg.Audit.Path, RedactSecrets: auditRedaction}, Operations: operations.New(), Approvals: approval.New(time.Duration(cfg.Approval.TTLSeconds) * time.Second), Docker: docker.Service{Exec: executor, Paths: cfg.DockerPaths, RedactSecrets: cfg.Privacy.RedactSecrets}, QPKG: qpkg.Service{Exec: executor}, Discovery: discovery.Service{Exec: executor}, System: qsystem.Service{Exec: executor}, Network: qnetwork.Service{Exec: executor}, Storage: storage.Service{Exec: executor}, Users: users.Service{Exec: executor}, Shares: shares.Service{Exec: executor}, Logs: logs.Service{AuditPath: cfg.Audit.Path, ServicePath: "/var/log/qnap-ai-control-agent/service.log"}, Ecosystem: ecosystem.Service{Discovery: discovery.Service{Exec: executor}, Exec: executor, Adapters: cfg.QNAPAdapters}, ProbePath: defaultProbePath(), started: time.Now(), hostname: host}
 	server.Jobs = jobs.NewWithOptions(jobs.Options{MaxHistory: cfg.Jobs.MaxHistory, MaxConcurrent: cfg.Jobs.MaxConcurrent, JournalPath: cfg.Jobs.JournalPath, OnEvent: server.auditJobEvent})
+	server.thermalRun = func(ctx context.Context, req qexec.Request) (qexec.Result, error) {
+		return server.Exec.Run(ctx, req)
+	}
+	return server
+}
+
+func NewWithTokenStore(cfg config.Config, configPath string, store *auth.TokenStore) *Server {
+	server := New(cfg)
+	server.ConfigPath = configPath
+	server.TokenStore = store
 	return server
 }
 
@@ -107,7 +122,7 @@ func defaultProbePath() string {
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.index)
+	mux.Handle("/", s.webHandler())
 	mux.Handle("/v1/", s.auth(s.operationControl(http.HandlerFunc(s.routes))))
 	return s.requestID(mux)
 }
@@ -151,20 +166,26 @@ func rc(r *http.Request) requestContext {
 }
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		if !strings.HasPrefix(auth, "Bearer ") {
+		actual := bearerToken(r)
+		if actual == "" {
 			s.fail(w, r, http.StatusUnauthorized, "unauthorized", "missing bearer token", nil)
 			return
 		}
-		actual := strings.TrimPrefix(auth, "Bearer ")
-		sum := sha256.Sum256([]byte(actual))
-		if subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(s.Config.Auth.TokenSHA256)) != 1 {
+		if s.Auth == nil || !s.Auth.Verify(actual) {
 			s.audit(r, "auth.denied", "failed", nil, 0, "invalid bearer token")
 			s.fail(w, r, http.StatusUnauthorized, "unauthorized", "invalid bearer token", nil)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func bearerToken(r *http.Request) string {
+	header := r.Header.Get("Authorization")
+	if !strings.HasPrefix(header, "Bearer ") {
+		return ""
+	}
+	return strings.TrimPrefix(header, "Bearer ")
 }
 func (s *Server) routes(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
@@ -250,6 +271,8 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request) {
 		s.ecosystemCommand(w, r, "storage_manager")
 	case "/v1/qnap/certificates/inspect":
 		s.certificateInspect(w, r)
+	case "/v1/admin/token", "/v1/admin/token/reveal", "/v1/admin/token/generate", "/v1/admin/settings":
+		s.adminRoute(w, r)
 	case "/v1/files/list":
 		s.fileList(w, r)
 	case "/v1/files/stat":
@@ -316,18 +339,6 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request) {
 		}
 		s.fail(w, r, http.StatusNotFound, "not_found", "route not found", nil)
 	}
-}
-func (s *Server) index(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = io.WriteString(w, indexPage)
 }
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r, map[string]any{"version": Version, "host": s.hostname, "uptime_s": int(time.Since(s.started).Seconds()), "profile": s.Config.Profile})
@@ -469,7 +480,20 @@ func (s *Server) powerRoute(w http.ResponseWriter, r *http.Request) {
 	s.power(w, r)
 }
 func (s *Server) thermal(w http.ResponseWriter, r *http.Request) {
-	out := map[string]any{"sensors": []any{}, "qnap": map[string]any{}}
+	s.ok(w, r, s.thermalSnapshot(r.Context()))
+}
+
+func (s *Server) thermalSnapshot(ctx context.Context) map[string]any {
+	return s.thermalSnapshotWithBudget(ctx, 8*time.Second)
+}
+
+func (s *Server) thermalSnapshotWithBudget(ctx context.Context, budget time.Duration) map[string]any {
+	if budget <= 0 {
+		budget = 8 * time.Second
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	out := map[string]any{"available": true, "partial": false, "sensors": []any{}, "qnap": map[string]any{}}
 	add := func(kind, name string, value float64, unit string, raw string) {
 		out["sensors"] = append(out["sensors"].([]any), map[string]any{"type": kind, "name": name, "value": value, "unit": unit, "raw": raw})
 	}
@@ -481,9 +505,20 @@ func (s *Server) thermal(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	qnap := out["qnap"].(map[string]any)
+	run := s.thermalRun
+	if run == nil {
+		run = func(runCtx context.Context, req qexec.Request) (qexec.Result, error) {
+			return s.Exec.Run(runCtx, req)
+		}
+	}
 	get := func(args ...string) string {
-		result, err := s.Exec.Run(r.Context(), qexec.Request{Argv: append([]string{"/sbin/getsysinfo"}, args...), Timeout: 8 * time.Second, MaxOutput: s.Config.Command.MaxOutputBytes})
-		qnap[strings.Join(args, ".")] = commandData(result, err)
+		key := strings.Join(args, ".")
+		if probeCtx.Err() != nil {
+			qnap[key] = map[string]any{"available": false, "reason": "thermal probe timed out"}
+			return ""
+		}
+		result, err := run(probeCtx, qexec.Request{Argv: append([]string{"/sbin/getsysinfo"}, args...), Timeout: 8 * time.Second, MaxOutput: s.Config.Command.MaxOutputBytes})
+		qnap[key] = commandData(result, err)
 		if err != nil {
 			return ""
 		}
@@ -509,11 +544,16 @@ func (s *Server) thermal(w http.ResponseWriter, r *http.Request) {
 			add("temperature", "Disk "+strconv.Itoa(i), value, "C", raw)
 		}
 	}
-	/*for _, key := range []string{"cputmp", "systmp", "sysfannum"} {
-		result, err := s.Exec.Run(r.Context(), qexec.Request{Argv: []string{"/sbin/getsysinfo", key}, Timeout: 8 * time.Second, MaxOutput: s.Config.Command.MaxOutputBytes})
-		out["qnap"].(map[string]any)[key] = commandData(result, err)
-	}*/
-	s.ok(w, r, out)
+	if err := probeCtx.Err(); err != nil {
+		out["partial"] = true
+		if errors.Is(err, context.DeadlineExceeded) {
+			out["reason"] = "thermal probe timed out"
+		} else {
+			out["reason"] = "thermal probe cancelled"
+		}
+		out["available"] = len(out["sensors"].([]any)) > 0
+	}
+	return out
 }
 func (s *Server) power(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
@@ -1672,33 +1712,3 @@ func randomID() string {
 	return hex.EncodeToString(b)
 }
 func glob(pattern string) []string { matches, _ := filepath.Glob(pattern); return matches }
-
-const indexPage = `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QNAP AI Control Suite</title>
-<style>
-:root{color-scheme:dark;--bg:#101820;--surface:#17252e;--surface-2:#1e313b;--line:#38505c;--text:#edf3f7;--muted:#a9bbc5;--green:#65c7a2;--amber:#f2c879;--red:#ee8f8f}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1240px;margin:auto;padding:28px 22px 48px}header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;border-bottom:1px solid var(--line);padding-bottom:20px}h1{font-size:25px;margin:0}h2{font-size:17px;margin:0 0 12px}p{color:var(--muted);line-height:1.55}.eyebrow{font-size:12px;color:var(--green);margin:0 0 6px}.connection{display:flex;align-items:center;gap:8px;flex-wrap:wrap}input,button{font:inherit;border-radius:5px;padding:9px 10px;border:1px solid #55707c}input{width:240px;background:#0d161c;color:var(--text)}button{background:#2e6f67;color:white;border-color:#438d82;cursor:pointer}button:hover{background:#378278}.status{color:var(--muted);font-size:13px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:20px 0}.card{border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:14px;min-height:88px}.label{font-size:12px;color:var(--muted);margin-bottom:9px}.value{font-size:18px;font-weight:650;word-break:break-word}.sub{font-size:12px;color:var(--muted);margin-top:6px}.bands{display:grid;grid-template-columns:1.05fr .95fr;gap:18px}.panel{border-top:1px solid var(--line);padding:20px 0}.list{display:grid;gap:8px}.row{background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:10px;display:flex;justify-content:space-between;gap:12px}.row span:last-child{color:var(--muted);text-align:right;overflow-wrap:anywhere}pre{margin:0;max-height:320px;overflow:auto;background:#0a1117;border:1px solid #263b46;border-radius:5px;padding:12px;font-size:12px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}.ok{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--red)}.empty{color:var(--muted);padding:10px 0}@media(max-width:760px){main{padding:20px 14px}header{display:block}.connection{margin-top:14px}.bands{grid-template-columns:1fr}input{width:min(100%,320px)}}
-</style></head><body><main>
-<header><div><p class="eyebrow">LOCAL QNAP CONTROL PLANE</p><h1>QNAP AI Control Suite</h1><p>系统、容器、存储和 Agent 控制状态。</p></div><div class="connection"><input id="token" type="password" autocomplete="off" placeholder="Bearer token"><button id="refresh" type="button">连接并刷新</button><span id="status" class="status">等待连接</span></div></header>
-<section class="grid" id="summary"><div class="card"><div class="label">Agent</div><div class="value">未连接</div></div></section>
-<div class="bands"><section class="panel"><h2>系统与硬件</h2><div id="system" class="list"><div class="empty">连接后显示 CPU、内存、负载和温度。</div></div></section><section class="panel"><h2>存储与服务</h2><div id="inventory" class="list"><div class="empty">连接后显示磁盘、容器、QPKG 和 Job。</div></div></section></div>
-<div class="bands"><section class="panel"><h2>运行能力</h2><div id="capabilities" class="list"><div class="empty">连接后显示 QTS/QuTS hero 与可用适配器。</div></div></section><section class="panel"><h2>最近审计</h2><pre id="audit">连接后显示最近 200 条以内的审计记录。</pre></section></div>
-<div class="bands"><section class="panel"><h2>MCP 接入</h2><p>在 Codex、OpenClaw、Hermes 或其他 stdio MCP 客户端中配置以下 bridge。将 token 保留在客户端环境变量中，不要写入仓库。</p><pre id="mcp">连接后生成当前地址的配置。</pre></section><section class="panel"><h2>操作流程</h2><div class="list"><div class="row"><span>1. 连接</span><span>输入 WebUI token 并刷新状态。</span></div><div class="row"><span>2. 诊断</span><span>Agent 先调用 nas_health、nas_discovery、nas_system_resources。</span></div><div class="row"><span>3. 管理</span><span>容器使用 nas_docker_command；QPKG 使用 nas_qpkg_manage；复杂 QTS 操作可使用 nas_exec 或 nas_shell。</span></div><div class="row"><span>4. 追踪</span><span>长操作读取 nas_job_get、nas_job_logs；所有调用保留审计记录。</span></div></div></section></div>
-</main><script>
-const $=id=>document.getElementById(id), token=$("token"), status=$("status");
-function esc(value){return String(value??"").replace(/[&<>\"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));}
-function bytes(n){if(!Number.isFinite(n))return "-";for(const u of ["B","KiB","MiB","GiB","TiB"]){if(Math.abs(n)<1024)return n.toFixed(u==="B"?0:1)+" "+u;n/=1024;}return n.toFixed(1)+" PiB";}
-function card(label,value,detail,klass=""){return '<div class="card"><div class="label">'+esc(label)+'</div><div class="value '+klass+'">'+esc(value)+'</div><div class="sub">'+esc(detail||"")+'</div></div>';}
-function row(label,value){return '<div class="row"><span>'+esc(label)+'</span><span>'+esc(value)+'</span></div>';}
-async function api(path){const r=await fetch(path,{headers:{Authorization:"Bearer "+token.value}});const j=await r.json().catch(()=>({}));if(!r.ok||!j.ok)throw Error(j.error?.message||("HTTP "+r.status));return j.data;}
-function commandCount(command){return command&&command.stdout?command.stdout.trim().split("\\n").filter(Boolean).length:0;}
-function render(data){const [health,capabilities,discovery,resources,thermal,storage,containers,qpkg,jobs,audit]=data;const memory=resources.memory_bytes||{};const sensors=thermal.sensors||[];const temps=sensors.filter(x=>x.type==="temperature");const fans=sensors.filter(x=>x.type==="fan");const disks=storage.disks||[];const packages=qpkg.packages||[];const jobItems=jobs.jobs||[];const running=jobItems.filter(x=>x.status==="running").length;
-  $("summary").innerHTML=card("Agent",health.version,"运行 "+health.uptime_s+" 秒", "ok")+card("Profile",health.profile,"确认模式："+(capabilities.confirmation?.mode||"-"))+card("平台",discovery.platform,discovery.model||health.host)+card("CPU 负载",(resources.load_average||[]).join(" / ")||"-","1 / 5 / 15 分钟")+card("内存",bytes(memory.MemAvailable??memory.MemFree),"可用 / 总计 "+bytes(memory.MemTotal))+card("温度",temps.length?Math.max(...temps.map(x=>Number(x.value)||0)).toFixed(0)+" C":"-",temps.length+" 温度传感器，"+fans.length+" 风扇");
-  $("system").innerHTML=row("主机名",health.host)+row("内核",resources.kernel||discovery.utilities?.uname||"运行时发现")+row("系统时间",resources.time||"-")+row("挂载点",String((storage.volumes||[]).length))+row("温度传感器",temps.map(x=>x.name+": "+x.value+" "+x.unit).join("，")||"未发现");
-  $("inventory").innerHTML=row("物理磁盘",String(disks.length))+row("RAID 组",String((storage.raid_groups||[]).length))+row("容器",String(commandCount(containers)))+row("QPKG",String(packages.length))+row("运行中 Job",String(running))+row("QTS inventory",storage.qts?.supported?"qcli_storage 已连接":(storage.qts?.reason||"未发现"));
-  const features=Object.entries(discovery.features||{}).map(([name,feature])=>row(name,feature.supported?"可用":(feature.reason||"不可用"))).join("");$("capabilities").innerHTML=features||'<div class="empty">未返回能力信息。</div>';
-  $("audit").textContent=JSON.stringify({recent:audit?.lines||[],jobs:jobItems.slice(0,10)},null,2);
-  $("mcp").textContent=JSON.stringify({mcpServers:{"qnap-ai-control":{command:"node",args:["/path/to/qnap-ai-control-suite/mac-bridge/src/server.js"],env:{QACS_BASE_URL:location.origin,QACS_TOKEN:"REPLACE_WITH_TOKEN"}}}},null,2);
-}
-async function loadAll(){if(!token.value.trim()){status.textContent="需要 Bearer token";status.className="status warn";return;}status.textContent="正在读取 NAS 状态…";status.className="status";try{const result=await Promise.all([api("/v1/health"),api("/v1/capabilities"),api("/v1/qnap/discovery"),api("/v1/system/resources"),api("/v1/system/thermal"),api("/v1/storage/overview"),api("/v1/docker/containers").catch(e=>({error:e.message})),api("/v1/qnap/qpkg").catch(e=>({error:e.message})),api("/v1/jobs"),api("/v1/audit/tail").catch(e=>({error:e.message}))]);render(result);status.textContent="已连接";status.className="status ok";}catch(e){status.textContent="连接失败："+e.message;status.className="status bad";}}
-$("refresh").addEventListener("click",loadAll);token.addEventListener("keydown",e=>{if(e.key==="Enter")loadAll();});
-</script></body></html>`

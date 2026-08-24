@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0f1419">
+    <title>QNAP AI Control</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <div class="scrim" id="scrim" aria-hidden="true"></div>
+      <aside class="sidebar" id="sidebar" aria-label="主导航">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div>
+            <strong>QNAP AI</strong>
+            <span>Control</span>
+          </div>
+        </div>
+        <nav class="nav-list">
+          <button class="nav-item is-active" type="button" data-view-target="overview" aria-current="page">
+            <span class="nav-icon" data-icon="grid"></span><span>概览</span>
+          </button>
+          <button class="nav-item" type="button" data-view-target="connect">
+            <span class="nav-icon" data-icon="key"></span><span>接入</span>
+          </button>
+          <button class="nav-item" type="button" data-view-target="system">
+            <span class="nav-icon" data-icon="sliders"></span><span>系统</span>
+          </button>
+          <button class="nav-item" type="button" data-view-target="logs">
+            <span class="nav-icon" data-icon="list"></span><span>日志</span>
+          </button>
+        </nav>
+        <div class="sidebar-footer">
+          <div class="connection-state"><span class="state-dot" id="sidebar-dot"></span><span id="sidebar-status">未连接</span></div>
+          <span class="sidebar-version" id="sidebar-version">Agent —</span>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <button class="icon-button menu-button" id="menu-button" type="button" aria-label="打开导航" aria-expanded="false" data-icon="menu"></button>
+          <div class="page-heading">
+            <span class="page-context">QNAP AI Control</span>
+            <h1 id="page-title">概览</h1>
+          </div>
+          <div class="topbar-actions">
+            <div class="connection-state top-connection"><span class="state-dot" id="top-dot"></span><span id="top-status">未连接</span></div>
+            <button class="button secondary compact" id="refresh-button" type="button"><span data-icon="refresh"></span><span>刷新</span></button>
+          </div>
+        </header>
+
+        <section class="auth-strip" aria-label="Agent 连接">
+          <div class="auth-copy">
+            <span class="auth-label">Agent 接入</span>
+            <span class="auth-help">输入当前 Bearer Token 以访问受保护的管理数据</span>
+          </div>
+          <form class="auth-controls" id="connect-form">
+            <input type="hidden" name="username" autocomplete="username" value="agent">
+            <label class="sr-only" for="token-input">Bearer Token</label>
+            <input id="token-input" class="text-input token-input" type="password" autocomplete="off" spellcheck="false" placeholder="Bearer Token">
+            <button class="button primary compact" id="connect-button" type="submit">连接</button>
+          </form>
+        </section>
+
+        <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+        <section class="view is-active" data-view="overview" aria-labelledby="page-title">
+          <div class="view-intro">
+            <div>
+              <h2>NAS 状态</h2>
+              <p>集中查看 NAS、存储、Docker、QPKG、任务与 Agent 控制状态。</p>
+            </div>
+            <span class="last-updated" id="overview-updated">等待连接</span>
+          </div>
+
+          <div class="metrics-grid" id="metrics-grid">
+            <div class="metric skeleton-block"></div><div class="metric skeleton-block"></div><div class="metric skeleton-block"></div><div class="metric skeleton-block"></div>
+          </div>
+
+          <div class="content-grid overview-grid">
+            <section class="panel span-2">
+              <div class="panel-heading"><div><h3>系统资源</h3><p>实时运行概况</p></div><span class="status-badge neutral" id="resource-status">等待数据</span></div>
+              <div class="resource-layout" id="resource-panel"><div class="empty-state">连接后显示 CPU、内存、负载和温度。</div></div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading"><div><h3>存储</h3><p>磁盘与容量</p></div><span class="status-badge neutral" id="storage-status">等待数据</span></div>
+              <div class="stack-list" id="storage-panel"><div class="empty-state">等待连接</div></div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading"><div><h3>服务状态</h3><p>Docker 与 QPKG</p></div><span class="status-badge neutral" id="service-status">等待数据</span></div>
+              <div class="stack-list" id="service-panel"><div class="empty-state">等待连接</div></div>
+            </section>
+            <section class="panel span-2">
+              <div class="panel-heading"><div><h3>运行中 Jobs</h3><p>长任务生命周期</p></div><button class="text-button" type="button" data-view-target="logs">查看全部 <span data-icon="arrow"></span></button></div>
+              <div class="table-wrap"><table class="data-table"><thead><tr><th>任务</th><th>资源</th><th>状态</th><th>开始时间</th></tr></thead><tbody id="jobs-table"><tr><td colspan="4" class="empty-cell">连接后显示任务</td></tr></tbody></table></div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading"><div><h3>最近异常</h3><p>来自 Agent 审计</p></div><button class="text-button" type="button" data-view-target="logs">打开日志 <span data-icon="arrow"></span></button></div>
+              <div class="stack-list" id="errors-panel"><div class="empty-state">暂无数据</div></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" data-view="connect" aria-labelledby="page-title" hidden>
+          <div class="view-intro"><div><h2>连接 AI Agent</h2><p>配置 Codex、Hermes、OpenClaw 或其他 MCP 客户端访问当前 NAS。</p></div></div>
+          <div class="content-grid connect-grid">
+            <section class="panel span-2">
+              <div class="panel-heading"><div><h3>API Token</h3><p>此 Token 允许受信任的 AI Agent 访问 QNAP AI Control。</p></div><span class="status-badge neutral" id="token-status">未读取</span></div>
+              <div class="token-card">
+                        <div class="token-line"><label for="managed-token">当前 Token</label><div class="token-field"><input id="managed-token" class="text-input code-input" type="text" readonly placeholder="输入 Token 后读取"><button class="icon-button" id="toggle-token" type="button" aria-label="显示 Token" data-icon="eye"></button></div></div>
+                <div class="token-actions"><button class="button secondary" id="reveal-token" type="button"><span data-icon="eye"></span><span>显示</span></button><button class="button secondary" id="copy-token" type="button"><span data-icon="copy"></span><span>复制</span></button><button class="button secondary" id="set-token" type="button"><span data-icon="edit"></span><span>设置 Token</span></button><button class="button danger" id="generate-token" type="button"><span data-icon="spark"></span><span>重新生成</span></button></div>
+                <p class="fine-print" id="token-note">Token 更新后，旧 Token 会立即失效。需要同步 Codex、Hermes、OpenClaw 等客户端。</p>
+              </div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading"><div><h3>Agent 地址</h3><p>Bridge 运行在你的 Mac 上</p></div></div>
+              <div class="field-group"><label for="agent-url">QACS_BASE_URL</label><div class="inline-field"><input id="agent-url" class="text-input code-input" type="url" spellcheck="false"><button class="icon-button" id="copy-agent-url" type="button" aria-label="复制 Agent 地址" data-icon="copy"></button></div></div>
+              <div class="field-group"><label for="bridge-path">Bridge 路径</label><input id="bridge-path" class="text-input code-input" type="text" spellcheck="false" value="/path/to/qnap-ai-control-suite/mac-bridge/src/server.js"><span class="field-hint">这是运行 MCP Bridge 的电脑上的路径，不是 NAS 路径。</span></div>
+            </section>
+            <section class="panel span-2">
+              <div class="panel-heading"><div><h3>MCP 配置</h3><p>选择客户端后生成对应配置语法；不要直接覆盖客户端已有配置。</p></div><button class="button primary compact" id="copy-config" type="button"><span data-icon="copy"></span><span>复制配置</span></button></div>
+              <div class="config-controls">
+                <fieldset class="choice-group"><legend>客户端</legend><div class="choice-row" id="client-choices"><label class="choice is-selected"><input type="radio" name="client" value="generic" checked>通用 MCP</label><label class="choice"><input type="radio" name="client" value="codex">Codex</label><label class="choice"><input type="radio" name="client" value="hermes">Hermes</label><label class="choice"><input type="radio" name="client" value="openclaw">OpenClaw</label></div></fieldset>
+                <fieldset class="choice-group"><legend>工具模式</legend><div class="choice-row" id="toolset-choices"><label class="choice is-selected"><input type="radio" name="toolset" value="recommended" checked>推荐</label><label class="choice"><input type="radio" name="toolset" value="minimal">最小</label><label class="choice"><input type="radio" name="toolset" value="all">完整</label><label class="choice"><input type="radio" name="toolset" value="custom">自定义</label></div></fieldset>
+              </div>
+              <div class="toolset-options" id="custom-toolsets" hidden>
+                <label class="check-option"><input type="checkbox" value="core" checked>core</label><label class="check-option"><input type="checkbox" value="files" checked>files</label><label class="check-option"><input type="checkbox" value="docker" checked>docker</label><label class="check-option"><input type="checkbox" value="storage" checked>storage</label><label class="check-option"><input type="checkbox" value="network" checked>network</label><label class="check-option"><input type="checkbox" value="qnap" checked>qnap</label><label class="check-option"><input type="checkbox" value="admin" checked>admin</label><label class="check-option"><input type="checkbox" value="raw">raw</label><label class="check-option"><input type="checkbox" value="compat">compat</label>
+              </div>
+              <pre class="code-block" id="config-preview" aria-label="MCP 配置预览"></pre>
+              <p class="field-hint" id="config-format-hint">通用 MCP：JSON · mcpServers</p>
+              <p class="field-hint">配置中的 Token 只在当前浏览器内生成，不会上传到 NAS。请不要把包含真实 Token 的配置提交到 Git。</p>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" data-view="system" aria-labelledby="page-title" hidden>
+          <div class="view-intro"><div><h2>系统</h2><p>查看 Agent 策略、权限和已验证的 QNAP 能力。</p></div></div>
+          <div class="content-grid system-grid">
+            <section class="panel span-2"><div class="panel-heading"><div><h3>控制策略</h3><p>当前运行时配置</p></div></div><div class="settings-grid" id="settings-panel"><div class="empty-state">连接后显示系统设置。</div></div></section>
+            <section class="panel"><div class="panel-heading"><div><h3>权限边界</h3><p>full_trust 能力摘要</p></div></div><div class="stack-list" id="permission-panel"><div class="empty-state">等待连接</div></div></section>
+            <section class="panel"><div class="panel-heading"><div><h3>QNAP 适配器</h3><p>仅显示已验证配置</p></div></div><div class="stack-list" id="adapter-panel"><div class="empty-state">等待连接</div></div></section>
+          </div>
+        </section>
+
+        <section class="view" data-view="logs" aria-labelledby="page-title" hidden>
+          <div class="view-intro"><div><h2>日志</h2><p>审计、服务与 Job 记录按需读取，避免一次加载大量内容。</p></div><button class="button secondary compact" id="logs-refresh" type="button"><span data-icon="refresh"></span><span>刷新</span></button></div>
+          <div class="log-tabs" role="tablist" aria-label="日志类型"><button class="log-tab is-active" type="button" role="tab" aria-selected="true" data-log-tab="audit">审计日志</button><button class="log-tab" type="button" role="tab" aria-selected="false" data-log-tab="service">服务日志</button><button class="log-tab" type="button" role="tab" aria-selected="false" data-log-tab="jobs">Jobs</button></div>
+          <section class="panel log-panel"><div class="log-toolbar"><label class="sr-only" for="log-query">筛选日志</label><input class="text-input" id="log-query" type="search" placeholder="筛选 operation、target 或 status"><span class="field-hint" id="log-count">—</span></div><pre class="log-output" id="log-output">连接后读取日志。</pre></section>
+        </section>
+
+        <footer class="app-footer"><span>QNAP AI Control</span><span>本地控制中心 · 离线可用</span></footer>
+      </main>
+    </div>
+
+    <dialog class="modal" id="token-dialog" aria-labelledby="token-dialog-title">
+      <form method="dialog" id="token-form">
+        <div class="modal-header"><div><h2 id="token-dialog-title">设置新的 API Token</h2><p>新 Token 保存后立即生效，旧 Token 会失效。</p></div><button class="icon-button" value="cancel" type="submit" aria-label="关闭" data-icon="close"></button></div>
+        <input type="hidden" name="username" autocomplete="username" value="agent">
+        <label class="field-group" for="new-token"><span>新 Token</span><input class="text-input" id="new-token" type="password" autocomplete="new-password" minlength="24" required></label>
+        <label class="field-group" for="new-token-confirm"><span>再次输入</span><input class="text-input" id="new-token-confirm" type="password" autocomplete="new-password" minlength="24" required></label>
+        <p class="form-error" id="token-form-error" hidden></p>
+        <div class="modal-actions"><button class="button secondary" value="cancel" type="submit">取消</button><button class="button primary" id="save-token" value="default" type="submit">保存</button></div>
+      </form>
+    </dialog>
+
+    <dialog class="modal" id="confirm-dialog" aria-labelledby="confirm-dialog-title">
+      <form method="dialog" id="confirm-form"><div class="modal-header"><div><h2 id="confirm-dialog-title">重新生成 API Token？</h2><p>旧 Token 将立即失效，已配置的客户端需要同步更新。</p></div><button class="icon-button" value="cancel" type="submit" aria-label="关闭" data-icon="close"></button></div><div class="modal-actions"><button class="button secondary" value="cancel" type="submit">取消</button><button class="button danger" id="confirm-generate" value="default" type="submit">生成并替换</button></div></form>
+    </dialog>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

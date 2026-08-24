@@ -270,6 +270,62 @@ func Normalize(cfg Config) (Config, error) {
 
 func (c Config) Timeout() time.Duration { return time.Duration(c.Command.TimeoutSeconds) * time.Second }
 
+// SaveAtomic persists the normalized configuration without exposing a partially
+// written file to the agent or QTS startup scripts. The config contains only
+// token hashes; plaintext tokens belong in the separate auth token store.
+func SaveAtomic(path string, cfg Config) error {
+	if strings.TrimSpace(path) == "" {
+		return errors.New("config path is required")
+	}
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	b = append(b, '\n')
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".config-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	keep := false
+	defer func() {
+		_ = tmp.Close()
+		if !keep {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if err := tmp.Chmod(0600); err != nil {
+		return err
+	}
+	if _, err := tmp.Write(b); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	keep = true
+	return syncDir(dir)
+}
+
+func syncDir(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
+}
+
 func migrateLegacy(old legacyConfig) Config {
 	// v0.3.x had a command allowlist but no v1 permissions object. This QPKG
 	// is intentionally a trusted-LAN root control plane, so preserve the
