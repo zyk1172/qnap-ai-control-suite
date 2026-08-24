@@ -126,6 +126,7 @@ func TestJournalMarksUnfinishedJobsInterruptedAfterRestart(t *testing.T) {
 		t.Fatalf("recovered job=%#v exists=%v", current, ok)
 	}
 	close(release)
+	waitForStatus(t, manager, job.ID, Succeeded)
 }
 
 func TestConcurrencyLimit(t *testing.T) {
