@@ -1,6 +1,10 @@
 # 安全模型
 
-所有 `/v1/*` 路由均要求 Bearer token，并记录 JSONL audit event。token 只保存 SHA-256 hash；首次 token 文件权限为 `0600`。
+所有 `/v1/*` 路由均要求 Bearer token，并记录 JSONL audit event。运行时认证使用线程安全的 AuthManager；配置文件只保存 SHA-256 hash，当前明文 Token 单独保存于 `/etc/config/qnap-ai-control-agent/token`，文件权限为 `0600`，其目录为 `0700`。旧版 `initial-token.txt` 只用于升级迁移。
+
+WebUI 的 Token 管理 API 也受当前 Bearer Token 保护。QPKG 直接打开的 8756 页面不自动等同于已验证的 QTS 管理员 session；本项目不会伪造或猜测 QTS 登录态。没有当前 Token 时，hash-only 状态无法显示明文，只能在受信任环境生成新 Token。
+
+设置或生成 Token 前，TokenStore 会在同一目录创建、写入、同步并删除临时文件，检查目录是否可写以及 `config.json` 是否可被原子替换。真正更新时先原子写入 Token，再原子替换只含 hash 的配置；配置写入失败会恢复旧 Token。进程崩溃留下的短暂不一致会在下次启动时由 TokenStore 根据明文 Token 重新对齐。运行时只有持久化成功后才切换 AuthManager，因此普通权限/路径错误不会把服务锁死。
 
 `full_trust` 明确选择了完整控制：可访问 `/`、任意 argv 和 shell；它不再隐式关闭审批或日志脱敏。默认 `approval.mode=sensitive_only`，审计保留脱敏摘要。该模式仅适合物理可信或 VPN 保护的 LAN。
 

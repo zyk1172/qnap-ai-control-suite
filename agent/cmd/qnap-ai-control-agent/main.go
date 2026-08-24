@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"qnap-ai-control-suite/agent/internal/api"
+	"qnap-ai-control-suite/agent/internal/auth"
 	"qnap-ai-control-suite/agent/internal/config"
 )
 
@@ -40,7 +41,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := api.New(cfg).Run(api.SignalContext()); err != nil {
+	tokenStore := auth.NewTokenStore(*configPath)
+	if _, err := tokenStore.Ensure(&cfg); err != nil {
+		log.Fatal(err)
+	}
+	if err := api.NewWithTokenStore(cfg, *configPath, tokenStore).Run(api.SignalContext()); err != nil {
 		log.Fatal(err)
 	}
 }

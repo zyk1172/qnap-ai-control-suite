@@ -1,10 +1,45 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestSaveAtomicWritesReadableConfigWithRestrictedMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "config.json")
+	cfg := FullTrust("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	if err := SaveAtomic(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("mode=%o", info.Mode().Perm())
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Auth.TokenSHA256 != cfg.Auth.TokenSHA256 {
+		t.Fatalf("hash=%q", loaded.Auth.TokenSHA256)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(string(b), "\n") {
+		t.Fatal("config does not end with newline")
+	}
+	var document map[string]any
+	if err := json.Unmarshal(b, &document); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestMigratesLegacy032(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.json")

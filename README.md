@@ -1,6 +1,16 @@
 # QNAP AI Control Suite
 
-QNAP AI Control Suite v2 是面向 Codex、OpenClaw、Hermes 与其他 MCP client 的 QNAP 本地控制平面。它在 NAS 上运行一个单二进制 Go agent，并在 Mac 上通过 MCP bridge 提供 stdio 工具。
+QNAP AI Control 是面向 Codex、OpenClaw、Hermes 与其他 MCP client 的 QNAP 本地控制平面。它在 NAS 上运行一个自包含的 Go agent，并在 Mac 上通过 Node MCP bridge 提供 stdio 工具。
+
+## v2.1.0
+
+v2.1 在 v2.0 agent-native 控制面的基础上，增加了自包含的 QPKG 管理 WebUI、运行时 Token 管理和按客户端生成 MCP 配置。WebUI 不依赖 Node、CDN 或互联网资源。
+
+- 概览、接入、系统和日志分为独立页面；状态快照采用 best-effort，单个 QNAP 子系统不可用不会让整个页面失败。
+- 接入页可以查看 Token 状态、显示/复制当前 Token、设置自定义 Token 或生成新 Token。更新前会先验证配置目录可写，失败时不会切换认证状态。
+- 当前明文 Token 保存于 `/etc/config/qnap-ai-control-agent/token`（`0600`），配置文件只保存 SHA-256；旧版本的 `initial-token.txt` 会迁移到新位置。没有明文文件的 hash-only 安装不会被随机重置，只能生成新 Token。
+- WebUI 管理端点仍要求当前 Bearer Token。本项目不虚构 QTS 登录态；如果浏览器没有当前 Token，需先从受信任的安装环境取得或重新生成。
+- 配置生成器支持通用 MCP JSON、Codex TOML、Hermes YAML 和 OpenClaw JSON5/JSON 语法。Bridge 路径只保存在浏览器 localStorage，不会上传 NAS。
 
 ## v2.0.0
 
@@ -34,13 +44,13 @@ v1 的历史能力与边界仍见 [v0.3 到 v1.0.16 对比](docs/v0.3-v1.0.15-co
 ./scripts/package_qpkg.sh amd64
 ```
 
-将 `dist/QnapAIControl_2.0.0.qpkg` 上传到 App Center 手动安装。首次启动会生成 bearer token、`full_trust` 权限和 `sensitive_only` 审批配置。打开：
+将 `dist/QnapAIControl_2.1.0.qpkg` 上传到 App Center 手动安装。首次启动会生成 bearer token、`full_trust` 权限和 `sensitive_only` 审批配置。打开：
 
 ```text
 http://NAS_IP:8756/
 ```
 
-WebUI 只在当前页面输入状态保存 token；仪表盘显示 profile、平台和运行时发现能力。
+首次打开 WebUI 时输入当前 Bearer Token。连接后可以在“接入”页管理 Token 并复制 MCP 配置；Token 更新会立即使旧 Token 失效，因此需要同步并重启已配置的 MCP client。Token 权限不可写时页面会明确显示“存储不可写”，不会假装保存成功。
 
 ## MCP
 
@@ -52,14 +62,15 @@ WebUI 只在当前页面输入状态保存 token；仪表盘显示 profile、平
       "args": ["/path/to/qnap-ai-control-suite/mac-bridge/src/server.js"],
       "env": {
         "QACS_BASE_URL": "http://NAS_IP:8756",
-        "QACS_TOKEN": "REPLACE_WITH_TOKEN"
+        "QACS_TOKEN": "CURRENT_TOKEN",
+        "QACS_TOOLSETS": "core,files,docker,storage,network,qnap,admin"
       }
     }
   }
 }
 ```
 
-旧的 `mac-bridge/src/mcp-server.js` 仍可用作兼容入口。默认先调用 `nas_health`、`nas_status_snapshot`；需要更多能力时设置 `QACS_TOOLSETS`。`nas_exec` 是 argv 形式；需要重定向、管道或变量展开时使用 `nas_shell`。
+旧的 `mac-bridge/src/mcp-server.js` 仍可用作兼容入口。默认只公开 `core`；需要更多能力时设置 `QACS_TOOLSETS`。`nas_exec` 是 argv 形式；需要重定向、管道或变量展开时使用 `nas_shell`。完整配置和各客户端格式见 [MCP client 教程](docs/mcp-clients.md)。
 
 ## 安全模型
 
@@ -68,7 +79,7 @@ WebUI 只在当前页面输入状态保存 token；仪表盘显示 profile、平
 ## 文档
 
 - [安装和升级](docs/install.md)
-- [WebUI 使用](docs/webui.md)
+- [WebUI、Token 与权限](docs/webui.md)
 - [MCP client 教程](docs/mcp-clients.md)
 - [完整控制能力](docs/qnap-full-control.md)
 - [生态适配器配置](docs/ecosystem-adapters.md)

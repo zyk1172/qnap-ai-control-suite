@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	qexec "qnap-ai-control-suite/agent/internal/exec"
 	"qnap-ai-control-suite/agent/internal/files"
@@ -13,7 +14,16 @@ import (
 // statusSnapshot is intentionally best-effort: a missing optional NAS
 // subsystem must not turn a basic health check into a failed request.
 func (s *Server) statusSnapshot(w http.ResponseWriter, r *http.Request) {
-	out := map[string]any{"partial": false}
+	out := map[string]any{
+		"partial": false,
+		"agent": map[string]any{
+			"version":  Version,
+			"host":     s.hostname,
+			"uptime_s": int(time.Since(s.started).Seconds()),
+			"profile":  s.Config.Profile,
+			"approval": s.Config.Approval,
+		},
+	}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	add := func(name string, fn func() (any, error)) {
@@ -32,6 +42,7 @@ func (s *Server) statusSnapshot(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 	add("resources", func() (any, error) { return s.System.Info(r.Context()) })
+	add("thermal", func() (any, error) { return s.thermalSnapshot(r.Context()), nil })
 	add("network", func() (any, error) {
 		interfaces, err := s.Network.Interfaces()
 		if err != nil {

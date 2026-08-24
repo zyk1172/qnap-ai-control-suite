@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"qnap-ai-control-suite/agent/internal/approval"
+	"qnap-ai-control-suite/agent/internal/auth"
 	"qnap-ai-control-suite/agent/internal/config"
 	"qnap-ai-control-suite/agent/internal/jobs"
 )
@@ -578,8 +580,99 @@ func TestSensitiveApprovalExpiresBeforeRetry(t *testing.T) {
 func TestWebUIDashboardIsPublicAndListsOperationalPanels(t *testing.T) {
 	s, _ := testServer(t)
 	w := request(t, s, "", http.MethodGet, "/", "")
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "系统与硬件") || !strings.Contains(w.Body.String(), "/v1/storage/overview") {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "QNAP AI Control") || !strings.Contains(w.Body.String(), "概览") || !strings.Contains(w.Body.String(), "接入") || !strings.Contains(w.Body.String(), "系统") || !strings.Contains(w.Body.String(), "日志") || !strings.Contains(w.Body.String(), "API Token") || !strings.Contains(w.Body.String(), "MCP") {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	css := request(t, s, "", http.MethodGet, "/styles.css", "")
+	if css.Code != http.StatusOK || !strings.Contains(css.Header().Get("Content-Type"), "text/css") || css.Header().Get("Content-Security-Policy") == "" {
+		t.Fatalf("css status=%d headers=%v", css.Code, css.Header())
+	}
+	js := request(t, s, "", http.MethodGet, "/app.js", "")
+	if js.Code != http.StatusOK || !strings.Contains(js.Header().Get("Content-Type"), "javascript") || !strings.Contains(js.Body.String(), "QACS_BASE_URL") || !strings.Contains(js.Body.String(), "mcpServers") || !strings.Contains(js.Body.String(), "mcp_servers") || !strings.Contains(js.Body.String(), "mcp.servers") {
+		t.Fatalf("js status=%d headers=%v", js.Code, js.Header())
+	}
+	missing := request(t, s, "", http.MethodGet, "/missing-resource", "")
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing status=%d", missing.Code)
+	}
+}
+
+func TestTokenManagementRotatesAuthWithoutRestart(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	oldToken := "old-token-with-enough-length-123456"
+	newToken := "new-token-with-enough-length-654321"
+	cfg := config.FullTrust(auth.HashToken(oldToken))
+	cfg.Audit.Path = filepath.Join(dir, "audit.jsonl")
+	cfg.Jobs.JournalPath = filepath.Join(dir, "jobs.jsonl")
+	store := auth.NewTokenStore(configPath)
+	if _, err := store.Update(&cfg, oldToken); err != nil {
+		t.Fatal(err)
+	}
+	s := NewWithTokenStore(cfg, configPath, store)
+
+	status := request(t, s, oldToken, http.MethodGet, "/v1/admin/token", "")
+	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"recoverable":true`) || !strings.Contains(status.Body.String(), `"writable":true`) || strings.Contains(status.Body.String(), oldToken) {
+		t.Fatalf("status=%d body=%s", status.Code, status.Body.String())
+	}
+	reveal := request(t, s, oldToken, http.MethodPost, "/v1/admin/token/reveal", "")
+	if reveal.Code != http.StatusOK || !strings.Contains(reveal.Body.String(), oldToken) {
+		t.Fatalf("reveal status=%d body=%s", reveal.Code, reveal.Body.String())
+	}
+	updated := request(t, s, oldToken, http.MethodPut, "/v1/admin/token", `{"token":"`+newToken+`"}`)
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), newToken) {
+		t.Fatalf("update status=%d body=%s", updated.Code, updated.Body.String())
+	}
+	if old := request(t, s, oldToken, http.MethodGet, "/v1/health", ""); old.Code != http.StatusUnauthorized {
+		t.Fatalf("old token status=%d body=%s", old.Code, old.Body.String())
+	}
+	if current := request(t, s, newToken, http.MethodGet, "/v1/health", ""); current.Code != http.StatusOK {
+		t.Fatalf("new token status=%d body=%s", current.Code, current.Body.String())
+	}
+	loaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Auth.TokenSHA256 != auth.HashToken(newToken) {
+		t.Fatalf("config hash=%q", loaded.Auth.TokenSHA256)
+	}
+	audit, err := os.ReadFile(cfg.Audit.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(audit), oldToken) || strings.Contains(string(audit), newToken) {
+		t.Fatalf("token leaked into audit: %s", audit)
+	}
+}
+
+func TestTokenManagementRejectsConfigPathThatCannotBeReplaced(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	oldToken := "old-token-with-enough-length-123456"
+	newToken := "new-token-with-enough-length-654321"
+	cfg := config.FullTrust(auth.HashToken(oldToken))
+	cfg.Audit.Path = filepath.Join(dir, "audit.jsonl")
+	cfg.Jobs.JournalPath = filepath.Join(dir, "jobs.jsonl")
+	store := auth.NewTokenStore(configPath)
+	if _, err := store.Update(&cfg, oldToken); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(configPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(configPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s := NewWithTokenStore(cfg, configPath, store)
+	updated := request(t, s, oldToken, http.MethodPut, "/v1/admin/token", `{"token":"`+newToken+`"}`)
+	if updated.Code != http.StatusServiceUnavailable || !strings.Contains(updated.Body.String(), `"token_store_not_writable"`) {
+		t.Fatalf("status=%d body=%s", updated.Code, updated.Body.String())
+	}
+	if got, err := store.Read(); err != nil || got != oldToken {
+		t.Fatalf("token changed after writeability rejection: %q err=%v", got, err)
+	}
+	if current := request(t, s, oldToken, http.MethodGet, "/v1/health", ""); current.Code != http.StatusOK {
+		t.Fatalf("old token stopped working after writeability rejection: status=%d body=%s", current.Code, current.Body.String())
 	}
 }
 
