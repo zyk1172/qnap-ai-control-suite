@@ -60,6 +60,9 @@ jobs:
             bash -n "$file"
           done < <(git ls-files -z -- '*.sh')
 
+      - name: QPKG token migration contract
+        run: bash scripts/qpkg_token_contract_test.sh
+
       - name: Build Linux agent
         env:
           GOOS: linux

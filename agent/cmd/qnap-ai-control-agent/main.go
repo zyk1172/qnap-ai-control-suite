@@ -20,6 +20,7 @@ func main() {
 	configPath := flag.String("config", envOrDefault("QACS_CONFIG", config.DefaultPath), "config file path")
 	printTokenHash := flag.Bool("print-token-hash", false, "read token from stdin and print sha256")
 	generateToken := flag.Bool("generate-token", false, "generate an API token")
+	resetToken := flag.Bool("reset-token", false, "generate and persist a new API token; stop the service first")
 	flag.Parse()
 	if *printTokenHash {
 		b, err := io.ReadAll(os.Stdin)
@@ -31,6 +32,14 @@ func main() {
 	}
 	if *generateToken {
 		token, err := randomToken()
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(token)
+		return
+	}
+	if *resetToken {
+		token, err := resetPersistedToken(*configPath)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -66,4 +75,20 @@ func randomToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+func resetPersistedToken(configPath string) (string, error) {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return "", fmt.Errorf("load config: %w", err)
+	}
+	token, err := auth.GenerateToken()
+	if err != nil {
+		return "", fmt.Errorf("generate token: %w", err)
+	}
+	store := auth.NewTokenStore(configPath)
+	if _, err := store.Update(&cfg, token); err != nil {
+		return "", fmt.Errorf("persist token: %w", err)
+	}
+	return token, nil
 }

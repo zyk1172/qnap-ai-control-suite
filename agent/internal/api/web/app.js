@@ -219,8 +219,10 @@
   function errorMessage(error) {
     if (!(error instanceof APIError)) return "网络请求失败，请检查 Agent 是否运行。";
     if (error.status === 401 || error.code === "unauthorized") return "Token 无效或已失效，请重新输入。";
+    if (error.code === "stale_token") return "Token 刚刚被另一请求更新，请使用当前 Token 重试。";
     if (error.code === "token_unrecoverable") return "当前 hash-only 配置没有可读取的明文 Token，请重新生成。";
     if (error.code === "token_store_not_writable") return "Token 存储不可写，请检查 QPKG 配置目录权限或以管理员身份运行 Agent。";
+    if (error.code === "token_recovery_required") return "Token 更新未能完成回滚，请立即通过受信任的本机维护方式检查 token 与 config.json。";
     if (error.code === "capability_unavailable") return "该 QNAP 能力当前不可用。";
     return error.message || "请求失败。";
   }

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +25,15 @@ func TestTokenStoreMigratesInitialToken(t *testing.T) {
 	if err := os.WriteFile(legacyPath, []byte(token+"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	cfg := testConfig(path, "different-token-with-enough-length-654321")
+	directoryInfo, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedDirectoryMode := directoryInfo.Mode().Perm()
+	cfg := testConfig(path, token)
+	if err := config.SaveAtomic(path, cfg); err != nil {
+		t.Fatal(err)
+	}
 	store := NewTokenStore(path)
 	metadata, err := store.Ensure(&cfg)
 	if err != nil {
@@ -46,19 +55,15 @@ func TestTokenStoreMigratesInitialToken(t *testing.T) {
 	if info.Mode().Perm() != 0600 {
 		t.Fatalf("token mode=%o", info.Mode().Perm())
 	}
-	legacyInfo, err := os.Stat(legacyPath)
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy token was not retired: %v", err)
+	}
+	directoryInfo, err = os.Stat(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if legacyInfo.Mode().Perm() != 0600 {
-		t.Fatalf("legacy token mode=%o", legacyInfo.Mode().Perm())
-	}
-	directoryInfo, err := os.Stat(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if directoryInfo.Mode().Perm() != 0700 {
-		t.Fatalf("token directory mode=%o", directoryInfo.Mode().Perm())
+	if directoryInfo.Mode().Perm() != expectedDirectoryMode {
+		t.Fatalf("existing token directory mode changed from %o to %o", expectedDirectoryMode, directoryInfo.Mode().Perm())
 	}
 	loaded, err := config.Load(path)
 	if err != nil {
@@ -102,6 +107,65 @@ func TestTokenStoreHashOnlyLegacyStateIsNotReset(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, TokenFileName)); !os.IsNotExist(err) {
 		t.Fatalf("token file unexpectedly created: %v", err)
+	}
+}
+
+func TestTokenStoreRejectsStaleInitialToken(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	configuredToken := "configured-token-with-enough-length-123456"
+	staleToken := "stale-token-with-enough-length-654321"
+	legacyPath := filepath.Join(dir, InitialTokenFileName)
+	if err := os.WriteFile(legacyPath, []byte(staleToken+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig(path, configuredToken)
+	store := NewTokenStore(path)
+	metadata, err := store.Ensure(&cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !metadata.Configured || metadata.Recoverable || metadata.Masked != "" {
+		t.Fatalf("metadata=%+v", metadata)
+	}
+	if _, err := os.Stat(filepath.Join(dir, TokenFileName)); !os.IsNotExist(err) {
+		t.Fatalf("stale token was migrated: %v", err)
+	}
+	if _, err := os.Stat(legacyPath); err != nil {
+		t.Fatalf("legacy token should remain available for explicit recovery: %v", err)
+	}
+	if cfg.Auth.TokenSHA256 != HashToken(configuredToken) {
+		t.Fatalf("configured hash changed: %q", cfg.Auth.TokenSHA256)
+	}
+}
+
+func TestTokenStoreDoesNotChangeExistingParentPermissions(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "custom-config.json")
+	if err := os.WriteFile(path, []byte(`{"auth":{"token_sha256":"placeholder"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig(path, "parent-permission-token-with-enough-length-123456")
+	store := NewTokenStore(path)
+	if _, err := store.Ensure(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0755 {
+		t.Fatalf("existing parent mode changed to %o", info.Mode().Perm())
+	}
+	configInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configInfo.Mode().Perm() != 0600 {
+		t.Fatalf("config mode=%o", configInfo.Mode().Perm())
 	}
 }
 
@@ -149,17 +213,11 @@ func TestTokenStoreUpdateRestoresTokenWhenConfigWriteFails(t *testing.T) {
 	if _, err := store.Update(&cfg, oldToken); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(configPath); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(configPath, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.CheckWritable(); err == nil {
-		t.Fatal("directory config path was reported writable")
+	store.saveConfig = func(string, config.Config) error {
+		return errors.New("injected config persistence failure")
 	}
 	if _, err := store.Update(&cfg, newToken); err == nil {
-		t.Fatal("update unexpectedly succeeded with directory config path")
+		t.Fatal("update unexpectedly succeeded with injected config failure")
 	}
 	got, err := store.Read()
 	if err != nil {
@@ -170,6 +228,39 @@ func TestTokenStoreUpdateRestoresTokenWhenConfigWriteFails(t *testing.T) {
 	}
 	if strings.Contains(got, newToken) {
 		t.Fatal("new token leaked into restored token")
+	}
+	loaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Auth.TokenSHA256 != HashToken(oldToken) {
+		t.Fatalf("config hash changed after rollback: %q", loaded.Auth.TokenSHA256)
+	}
+}
+
+func TestTokenStoreReportsRecoveryFailure(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	oldToken := "old-token-with-enough-length-123456"
+	newToken := "new-token-with-enough-length-654321"
+	cfg := testConfig(configPath, oldToken)
+	store := NewTokenStore(configPath)
+	if _, err := store.Update(&cfg, oldToken); err != nil {
+		t.Fatal(err)
+	}
+	store.saveConfig = func(string, config.Config) error {
+		return errors.New("injected config persistence failure")
+	}
+	writes := 0
+	store.writeFileAtomic = func(path string, data []byte, mode os.FileMode) error {
+		writes++
+		if writes == 2 {
+			return errors.New("injected token rollback failure")
+		}
+		return writeAtomic(path, data, mode)
+	}
+	if _, err := store.Update(&cfg, newToken); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("expected recovery-required error, got %v", err)
 	}
 }
 

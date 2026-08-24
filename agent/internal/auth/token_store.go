@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -22,11 +23,23 @@ const (
 	MaximumTokenLength   = 4096
 )
 
+var (
+	// ErrNotWritable is returned when the token/config state directory cannot
+	// complete the same-directory atomic write sequence required for rotation.
+	ErrNotWritable = errors.New("token store is not writable")
+	// ErrRecoveryRequired means the persistence transaction failed and at
+	// least one compensating write could not be verified. The running
+	// AuthManager is deliberately not changed in that case.
+	ErrRecoveryRequired = errors.New("token recovery required")
+)
+
 type TokenStore struct {
-	mu         sync.Mutex
-	configPath string
-	directory  string
-	tokenPath  string
+	mu              sync.Mutex
+	configPath      string
+	directory       string
+	tokenPath       string
+	saveConfig      func(string, config.Config) error
+	writeFileAtomic func(string, []byte, os.FileMode) error
 }
 
 type Metadata struct {
@@ -39,7 +52,13 @@ type Metadata struct {
 
 func NewTokenStore(configPath string) *TokenStore {
 	directory := filepath.Dir(configPath)
-	return &TokenStore{configPath: configPath, directory: directory, tokenPath: filepath.Join(directory, TokenFileName)}
+	return &TokenStore{
+		configPath:      configPath,
+		directory:       directory,
+		tokenPath:       filepath.Join(directory, TokenFileName),
+		saveConfig:      config.SaveAtomic,
+		writeFileAtomic: writeAtomic,
+	}
 }
 
 // Ensure migrates the old plaintext file when present and reconciles the
@@ -49,6 +68,9 @@ func (s *TokenStore) Ensure(cfg *config.Config) (Metadata, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.ensureDirectory(); err != nil {
+		return Metadata{}, err
+	}
+	if err := s.secureConfigFile(); err != nil {
 		return Metadata{}, err
 	}
 	legacyPath := filepath.Join(s.directory, InitialTokenFileName)
@@ -72,8 +94,24 @@ func (s *TokenStore) Ensure(cfg *config.Config) (Metadata, error) {
 			if err := validateToken(token); err != nil {
 				return Metadata{}, fmt.Errorf("invalid initial token: %w", err)
 			}
-			if err := writeAtomic(s.tokenPath, []byte(token+"\n"), 0600); err != nil {
+			// The legacy file is not authoritative. Only migrate it when it
+			// matches the hash already stored in config.json. This prevents a
+			// stale initial-token.txt left by an old upgrade from resurrecting
+			// credentials that were rotated or replaced later.
+			if !strings.EqualFold(strings.TrimSpace(cfg.Auth.TokenSHA256), HashToken(token)) {
+				return hashOnlyMetadata(s.checkWritableLocked(), cfg.Auth.TokenSHA256), nil
+			}
+			if err := s.writeFileAtomicFn()(s.tokenPath, []byte(token+"\n"), 0600); err != nil {
 				return Metadata{}, err
+			}
+			// New installs do not create this file. Once a legacy token has
+			// been verified and migrated, remove the legacy plaintext so it
+			// cannot be mistaken for the current credential by older tooling.
+			if err := os.Remove(legacyPath); err != nil {
+				return Metadata{}, fmt.Errorf("retire legacy token: %w", err)
+			}
+			if err := syncDir(s.directory); err != nil {
+				return Metadata{}, fmt.Errorf("sync retired legacy token: %w", err)
 			}
 			found = true
 		} else if !errors.Is(legacyErr, os.ErrNotExist) {
@@ -81,7 +119,7 @@ func (s *TokenStore) Ensure(cfg *config.Config) (Metadata, error) {
 		}
 	}
 	if !found {
-		return Metadata{Configured: strings.TrimSpace(cfg.Auth.TokenSHA256) != "", Recoverable: false, Writable: s.checkWritableLocked() == nil}, nil
+		return hashOnlyMetadata(s.checkWritableLocked(), cfg.Auth.TokenSHA256), nil
 	}
 	if err := os.Chmod(s.tokenPath, 0600); err != nil {
 		return Metadata{}, err
@@ -90,7 +128,7 @@ func (s *TokenStore) Ensure(cfg *config.Config) (Metadata, error) {
 	if cfg.Auth.TokenSHA256 != hash {
 		updated := *cfg
 		updated.Auth.TokenSHA256 = hash
-		if err := config.SaveAtomic(s.configPath, updated); err != nil {
+		if err := s.saveConfigFn()(s.configPath, updated); err != nil {
 			return Metadata{}, err
 		}
 		cfg.Auth.TokenSHA256 = hash
@@ -154,16 +192,27 @@ func (s *TokenStore) Update(cfg *config.Config, token string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := writeAtomic(s.tokenPath, []byte(token+"\n"), 0600); err != nil {
+	oldConfig, err := os.ReadFile(s.configPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", err
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		oldConfig = nil
+	}
+	configFound := err == nil
+
+	writeErr := s.writeFileAtomicFn()(s.tokenPath, []byte(token+"\n"), 0600)
+	if writeErr != nil {
+		if rollbackErr := s.restoreStateLocked(oldConfig, configFound, oldToken, found); rollbackErr != nil {
+			return "", recoveryError(writeErr, rollbackErr)
+		}
+		return "", writeErr
 	}
 	updated := *cfg
 	updated.Auth.TokenSHA256 = HashToken(token)
-	if err := config.SaveAtomic(s.configPath, updated); err != nil {
-		if found {
-			_ = writeAtomic(s.tokenPath, []byte(oldToken+"\n"), 0600)
-		} else {
-			_ = os.Remove(s.tokenPath)
+	if err := s.saveConfigFn()(s.configPath, updated); err != nil {
+		if rollbackErr := s.restoreStateLocked(oldConfig, configFound, oldToken, found); rollbackErr != nil {
+			return "", recoveryError(err, rollbackErr)
 		}
 		return "", err
 	}
@@ -203,21 +252,48 @@ func validateToken(token string) error {
 }
 
 func (s *TokenStore) ensureDirectory() error {
+	info, err := os.Stat(s.directory)
+	if err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("token store path is not a directory: %s", s.directory)
+		}
+		// Never chmod an existing parent supplied through a custom config
+		// path. The QPKG's dedicated directory is secured by installation;
+		// here we only ensure files created by this store are 0600.
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	if err := os.MkdirAll(s.directory, 0700); err != nil {
 		return err
 	}
 	return os.Chmod(s.directory, 0700)
 }
 
+func (s *TokenStore) secureConfigFile() error {
+	info, err := os.Stat(s.configPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("config path is a directory, not a file: %s", s.configPath)
+	}
+	return os.Chmod(s.configPath, 0600)
+}
+
 func (s *TokenStore) checkWritableLocked() error {
 	if info, err := os.Stat(s.configPath); err == nil && info.IsDir() {
-		return errors.New("config path is a directory, not a writable file")
+		return fmt.Errorf("%w: config path is a directory, not a writable file", ErrNotWritable)
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	tmp, err := os.CreateTemp(s.directory, ".qacs-write-check-*")
 	if err != nil {
-		return fmt.Errorf("token store directory is not writable: %w", err)
+		return fmt.Errorf("%w: token store directory is not writable: %v", ErrNotWritable, err)
 	}
 	tmpName := tmp.Name()
 	cleanupPath := tmpName
@@ -228,30 +304,105 @@ func (s *TokenStore) checkWritableLocked() error {
 		}
 	}()
 	if err := tmp.Chmod(0600); err != nil {
-		return err
+		return fmt.Errorf("%w: chmod write check: %v", ErrNotWritable, err)
 	}
 	if _, err := tmp.Write([]byte("qacs-write-check\n")); err != nil {
-		return err
+		return fmt.Errorf("%w: write check: %v", ErrNotWritable, err)
 	}
 	if err := tmp.Sync(); err != nil {
-		return err
+		return fmt.Errorf("%w: sync write check: %v", ErrNotWritable, err)
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return fmt.Errorf("%w: close write check: %v", ErrNotWritable, err)
 	}
 	replacementName := tmpName + ".renamed"
 	if err := os.Rename(tmpName, replacementName); err != nil {
-		return fmt.Errorf("token store directory does not support atomic replacement: %w", err)
+		return fmt.Errorf("%w: token store directory does not support atomic replacement: %v", ErrNotWritable, err)
 	}
 	cleanupPath = replacementName
 	if err := os.Remove(replacementName); err != nil {
-		return err
+		return fmt.Errorf("%w: remove write check: %v", ErrNotWritable, err)
 	}
 	cleanupPath = ""
 	if err := syncDir(s.directory); err != nil {
-		return fmt.Errorf("token store directory cannot be synced: %w", err)
+		return fmt.Errorf("%w: token store directory cannot be synced: %v", ErrNotWritable, err)
 	}
 	return nil
+}
+
+func (s *TokenStore) saveConfigFn() func(string, config.Config) error {
+	if s.saveConfig != nil {
+		return s.saveConfig
+	}
+	return config.SaveAtomic
+}
+
+func (s *TokenStore) writeFileAtomicFn() func(string, []byte, os.FileMode) error {
+	if s.writeFileAtomic != nil {
+		return s.writeFileAtomic
+	}
+	return writeAtomic
+}
+
+func (s *TokenStore) restoreStateLocked(oldConfig []byte, configFound bool, oldToken string, tokenFound bool) error {
+	var rollbackErrors []error
+	if configFound {
+		if err := writeAtomic(s.configPath, oldConfig, 0600); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("restore config: %w", err))
+		}
+	} else if err := os.Remove(s.configPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		rollbackErrors = append(rollbackErrors, fmt.Errorf("remove new config: %w", err))
+	}
+	if tokenFound {
+		if err := s.writeFileAtomicFn()(s.tokenPath, []byte(oldToken+"\n"), 0600); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("restore token: %w", err))
+		}
+	} else if err := os.Remove(s.tokenPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		rollbackErrors = append(rollbackErrors, fmt.Errorf("remove new token: %w", err))
+	}
+	if err := syncDir(s.directory); err != nil {
+		rollbackErrors = append(rollbackErrors, fmt.Errorf("sync rollback: %w", err))
+	}
+	if err := s.verifyStateLocked(oldConfig, configFound, oldToken, tokenFound); err != nil {
+		rollbackErrors = append(rollbackErrors, err)
+	}
+	return errors.Join(rollbackErrors...)
+}
+
+func (s *TokenStore) verifyStateLocked(expectedConfig []byte, configFound bool, expectedToken string, tokenFound bool) error {
+	actualConfig, err := os.ReadFile(s.configPath)
+	if configFound {
+		if err != nil {
+			return fmt.Errorf("verify restored config: %w", err)
+		}
+		if !bytes.Equal(actualConfig, expectedConfig) {
+			return errors.New("verify restored config: content does not match the pre-rotation state")
+		}
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("verify removed config: %w", err)
+	} else if err == nil {
+		return errors.New("verify removed config: file still exists")
+	}
+
+	actualToken, actualFound, err := s.readTokenLocked()
+	if err != nil {
+		return fmt.Errorf("verify restored token: %w", err)
+	}
+	if actualFound != tokenFound {
+		return errors.New("verify restored token: presence does not match the pre-rotation state")
+	}
+	if tokenFound && actualToken != expectedToken {
+		return errors.New("verify restored token: content does not match the pre-rotation state")
+	}
+	return nil
+}
+
+func recoveryError(cause, rollback error) error {
+	return fmt.Errorf("%w: update failed: %v; rollback failed: %v", ErrRecoveryRequired, cause, rollback)
+}
+
+func hashOnlyMetadata(writableErr error, tokenHash string) Metadata {
+	return Metadata{Configured: strings.TrimSpace(tokenHash) != "", Recoverable: false, Writable: writableErr == nil}
 }
 
 func (s *TokenStore) readTokenLocked() (string, bool, error) {

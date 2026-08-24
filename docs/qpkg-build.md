@@ -5,6 +5,7 @@
 ```bash
 ./scripts/package_qpkg.sh amd64
 sh -n qpkg/shared/qnap-ai-control-agent.sh
+bash scripts/qpkg_token_contract_test.sh
 ```
 
 QPKG service 以 `exec` 启动 agent，PID file 对应真实进程；停止时先发送 SIGTERM 并等待，再作为最后手段发送 SIGKILL。

@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -40,29 +41,31 @@ import (
 )
 
 type Server struct {
-	Config     config.Config
-	Auth       *auth.AuthManager
-	TokenStore *auth.TokenStore
-	ConfigPath string
-	Exec       qexec.Executor
-	Files      files.Service
-	Jobs       *jobs.Manager
-	Audit      *audit.Logger
-	Operations operations.Registry
-	Approvals  *approval.Manager
-	Docker     docker.Service
-	QPKG       qpkg.Service
-	Discovery  discovery.Service
-	System     qsystem.Service
-	Network    qnetwork.Service
-	Storage    storage.Service
-	Users      users.Service
-	Shares     shares.Service
-	Logs       logs.Service
-	Ecosystem  ecosystem.Service
-	ProbePath  string
-	started    time.Time
-	hostname   string
+	Config          config.Config
+	Auth            *auth.AuthManager
+	TokenStore      *auth.TokenStore
+	ConfigPath      string
+	Exec            qexec.Executor
+	Files           files.Service
+	Jobs            *jobs.Manager
+	Audit           *audit.Logger
+	Operations      operations.Registry
+	Approvals       *approval.Manager
+	Docker          docker.Service
+	QPKG            qpkg.Service
+	Discovery       discovery.Service
+	System          qsystem.Service
+	Network         qnetwork.Service
+	Storage         storage.Service
+	Users           users.Service
+	Shares          shares.Service
+	Logs            logs.Service
+	Ecosystem       ecosystem.Service
+	ProbePath       string
+	started         time.Time
+	hostname        string
+	tokenRotationMu sync.Mutex
+	thermalRun      func(context.Context, qexec.Request) (qexec.Result, error)
 }
 
 // Version is injected by scripts/build_agent.sh from the repository VERSION file.
@@ -97,6 +100,9 @@ func New(cfg config.Config) *Server {
 	}
 	server := &Server{Config: cfg, Auth: auth.NewAuthManager(cfg.Auth.TokenSHA256), Exec: executor, Files: files.Service{Roots: cfg.Permissions.AllowedRoots, MaxInlineBytes: cfg.Files.MaxInlineBytes}, Audit: &audit.Logger{Enabled: cfg.Audit.Enabled, Path: cfg.Audit.Path, RedactSecrets: auditRedaction}, Operations: operations.New(), Approvals: approval.New(time.Duration(cfg.Approval.TTLSeconds) * time.Second), Docker: docker.Service{Exec: executor, Paths: cfg.DockerPaths, RedactSecrets: cfg.Privacy.RedactSecrets}, QPKG: qpkg.Service{Exec: executor}, Discovery: discovery.Service{Exec: executor}, System: qsystem.Service{Exec: executor}, Network: qnetwork.Service{Exec: executor}, Storage: storage.Service{Exec: executor}, Users: users.Service{Exec: executor}, Shares: shares.Service{Exec: executor}, Logs: logs.Service{AuditPath: cfg.Audit.Path, ServicePath: "/var/log/qnap-ai-control-agent/service.log"}, Ecosystem: ecosystem.Service{Discovery: discovery.Service{Exec: executor}, Exec: executor, Adapters: cfg.QNAPAdapters}, ProbePath: defaultProbePath(), started: time.Now(), hostname: host}
 	server.Jobs = jobs.NewWithOptions(jobs.Options{MaxHistory: cfg.Jobs.MaxHistory, MaxConcurrent: cfg.Jobs.MaxConcurrent, JournalPath: cfg.Jobs.JournalPath, OnEvent: server.auditJobEvent})
+	server.thermalRun = func(ctx context.Context, req qexec.Request) (qexec.Result, error) {
+		return server.Exec.Run(ctx, req)
+	}
 	return server
 }
 
@@ -160,12 +166,11 @@ func rc(r *http.Request) requestContext {
 }
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		if !strings.HasPrefix(auth, "Bearer ") {
+		actual := bearerToken(r)
+		if actual == "" {
 			s.fail(w, r, http.StatusUnauthorized, "unauthorized", "missing bearer token", nil)
 			return
 		}
-		actual := strings.TrimPrefix(auth, "Bearer ")
 		if s.Auth == nil || !s.Auth.Verify(actual) {
 			s.audit(r, "auth.denied", "failed", nil, 0, "invalid bearer token")
 			s.fail(w, r, http.StatusUnauthorized, "unauthorized", "invalid bearer token", nil)
@@ -173,6 +178,14 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func bearerToken(r *http.Request) string {
+	header := r.Header.Get("Authorization")
+	if !strings.HasPrefix(header, "Bearer ") {
+		return ""
+	}
+	return strings.TrimPrefix(header, "Bearer ")
 }
 func (s *Server) routes(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
@@ -471,7 +484,16 @@ func (s *Server) thermal(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) thermalSnapshot(ctx context.Context) map[string]any {
-	out := map[string]any{"sensors": []any{}, "qnap": map[string]any{}}
+	return s.thermalSnapshotWithBudget(ctx, 8*time.Second)
+}
+
+func (s *Server) thermalSnapshotWithBudget(ctx context.Context, budget time.Duration) map[string]any {
+	if budget <= 0 {
+		budget = 8 * time.Second
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	out := map[string]any{"available": true, "partial": false, "sensors": []any{}, "qnap": map[string]any{}}
 	add := func(kind, name string, value float64, unit string, raw string) {
 		out["sensors"] = append(out["sensors"].([]any), map[string]any{"type": kind, "name": name, "value": value, "unit": unit, "raw": raw})
 	}
@@ -483,9 +505,20 @@ func (s *Server) thermalSnapshot(ctx context.Context) map[string]any {
 		}
 	}
 	qnap := out["qnap"].(map[string]any)
+	run := s.thermalRun
+	if run == nil {
+		run = func(runCtx context.Context, req qexec.Request) (qexec.Result, error) {
+			return s.Exec.Run(runCtx, req)
+		}
+	}
 	get := func(args ...string) string {
-		result, err := s.Exec.Run(ctx, qexec.Request{Argv: append([]string{"/sbin/getsysinfo"}, args...), Timeout: 8 * time.Second, MaxOutput: s.Config.Command.MaxOutputBytes})
-		qnap[strings.Join(args, ".")] = commandData(result, err)
+		key := strings.Join(args, ".")
+		if probeCtx.Err() != nil {
+			qnap[key] = map[string]any{"available": false, "reason": "thermal probe timed out"}
+			return ""
+		}
+		result, err := run(probeCtx, qexec.Request{Argv: append([]string{"/sbin/getsysinfo"}, args...), Timeout: 8 * time.Second, MaxOutput: s.Config.Command.MaxOutputBytes})
+		qnap[key] = commandData(result, err)
 		if err != nil {
 			return ""
 		}
@@ -511,10 +544,15 @@ func (s *Server) thermalSnapshot(ctx context.Context) map[string]any {
 			add("temperature", "Disk "+strconv.Itoa(i), value, "C", raw)
 		}
 	}
-	/*for _, key := range []string{"cputmp", "systmp", "sysfannum"} {
-		result, err := s.Exec.Run(r.Context(), qexec.Request{Argv: []string{"/sbin/getsysinfo", key}, Timeout: 8 * time.Second, MaxOutput: s.Config.Command.MaxOutputBytes})
-		out["qnap"].(map[string]any)[key] = commandData(result, err)
-	}*/
+	if err := probeCtx.Err(); err != nil {
+		out["partial"] = true
+		if errors.Is(err, context.DeadlineExceeded) {
+			out["reason"] = "thermal probe timed out"
+		} else {
+			out["reason"] = "thermal probe cancelled"
+		}
+		out["available"] = len(out["sensors"].([]any)) > 0
+	}
 	return out
 }
 func (s *Server) power(w http.ResponseWriter, r *http.Request) {

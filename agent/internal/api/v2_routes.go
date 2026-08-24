@@ -39,6 +39,11 @@ func (s *Server) statusSnapshot(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			out[name] = value
+			if module, ok := value.(map[string]any); ok {
+				if partial, _ := module["partial"].(bool); partial {
+					out["partial"] = true
+				}
+			}
 		}()
 	}
 	add("resources", func() (any, error) { return s.System.Info(r.Context()) })

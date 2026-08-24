@@ -64,41 +64,19 @@ EOF
       echo "cannot write agent configuration" >&2
       return 1
     fi
-    if ! cat > "$CONFIG_DIR/initial-token.txt" <<EOF
-$TOKEN
-EOF
-    then
-      echo "cannot write legacy initial token file" >&2
-      rm -f "$CONFIG"
-      return 1
-    fi
-    if ! printf '%s\n' "$TOKEN" > "$CONFIG_DIR/token"; then
+    if ! printf '%s\n' "$TOKEN" > "$CONFIG_DIR/.token.install.tmp"; then
       echo "cannot write bearer token file" >&2
-      rm -f "$CONFIG" "$CONFIG_DIR/initial-token.txt"
+      rm -f "$CONFIG" "$CONFIG_DIR/.token.install.tmp"
       return 1
     fi
-    if ! chmod 600 "$CONFIG" "$CONFIG_DIR/token" "$CONFIG_DIR/initial-token.txt"; then
+    if ! chmod 600 "$CONFIG_DIR/.token.install.tmp"; then
       echo "cannot secure bearer token files" >&2
-      rm -f "$CONFIG" "$CONFIG_DIR/token" "$CONFIG_DIR/initial-token.txt"
+      rm -f "$CONFIG" "$CONFIG_DIR/.token.install.tmp"
       return 1
     fi
-  elif [ ! -f "$CONFIG_DIR/token" ] && [ -f "$CONFIG_DIR/initial-token.txt" ]; then
-    # v2.1 migrates the old first-install plaintext without changing the
-    # configured hash or generating a replacement token on upgrades.
-    umask 077
-    if ! cp "$CONFIG_DIR/initial-token.txt" "$CONFIG_DIR/.token.migrate.tmp"; then
-      echo "cannot stage legacy token migration" >&2
-      rm -f "$CONFIG_DIR/.token.migrate.tmp"
-      return 1
-    fi
-    if ! chmod 600 "$CONFIG_DIR/.token.migrate.tmp"; then
-      echo "cannot secure staged token migration" >&2
-      rm -f "$CONFIG_DIR/.token.migrate.tmp"
-      return 1
-    fi
-    if ! mv "$CONFIG_DIR/.token.migrate.tmp" "$CONFIG_DIR/token"; then
-      echo "cannot commit legacy token migration" >&2
-      rm -f "$CONFIG_DIR/.token.migrate.tmp"
+    if ! mv "$CONFIG_DIR/.token.install.tmp" "$CONFIG_DIR/token"; then
+      echo "cannot commit bearer token file" >&2
+      rm -f "$CONFIG" "$CONFIG_DIR/.token.install.tmp"
       return 1
     fi
   fi
@@ -110,6 +88,9 @@ EOF
     echo "cannot secure bearer token file" >&2
     return 1
   fi
+  # The Go TokenStore validates initial-token.txt against config.json before
+  # migrating it. The service script only tightens its file mode; it never
+  # copies legacy plaintext into the canonical token path.
   if [ -f "$CONFIG_DIR/initial-token.txt" ] && ! chmod 600 "$CONFIG_DIR/initial-token.txt"; then
     echo "cannot secure legacy bearer token file" >&2
     return 1

@@ -8,8 +8,8 @@ v2.1 在 v2.0 agent-native 控制面的基础上，增加了自包含的 QPKG �
 
 - 概览、接入、系统和日志分为独立页面；状态快照采用 best-effort，单个 QNAP 子系统不可用不会让整个页面失败。
 - 接入页可以查看 Token 状态、显示/复制当前 Token、设置自定义 Token 或生成新 Token。更新前会先验证配置目录可写，失败时不会切换认证状态。
-- 当前明文 Token 保存于 `/etc/config/qnap-ai-control-agent/token`（`0600`），配置文件只保存 SHA-256；旧版本的 `initial-token.txt` 会迁移到新位置。没有明文文件的 hash-only 安装不会被随机重置，只能生成新 Token。
-- WebUI 管理端点仍要求当前 Bearer Token。本项目不虚构 QTS 登录态；如果浏览器没有当前 Token，需先从受信任的安装环境取得或重新生成。
+- 当前明文 Token 保存于 `/etc/config/qnap-ai-control-agent/token`（`0600`），配置文件只保存 SHA-256；新安装不再创建 `initial-token.txt`。升级时旧文件只有在与 `config.json` 中现有 hash 一致时才会迁移，成功后被移除；不匹配的旧明文绝不会复活为当前凭据。
+- WebUI 管理端点仍要求当前 Bearer Token。本项目不虚构 QTS 登录态；QPKG 当前通过 8756 直接提供 WebUI，无法从 App Center 页面可靠证明 QTS 管理员身份。浏览器没有当前 Token 时，需先从受信任的安装环境取得或重新生成。
 - 配置生成器支持通用 MCP JSON、Codex TOML、Hermes YAML 和 OpenClaw JSON5/JSON 语法。Bridge 路径只保存在浏览器 localStorage，不会上传 NAS。
 
 ## v2.0.0
@@ -50,7 +50,7 @@ v1 的历史能力与边界仍见 [v0.3 到 v1.0.16 对比](docs/v0.3-v1.0.15-co
 http://NAS_IP:8756/
 ```
 
-首次打开 WebUI 时输入当前 Bearer Token。连接后可以在“接入”页管理 Token 并复制 MCP 配置；Token 更新会立即使旧 Token 失效，因此需要同步并重启已配置的 MCP client。Token 权限不可写时页面会明确显示“存储不可写”，不会假装保存成功。
+首次打开 WebUI 时输入当前 Bearer Token。连接后可以在“接入”页管理 Token 并复制 MCP 配置；Token 更新会立即使旧 Token 失效，因此需要同步并重启已配置的 MCP client。Token 或配置存储不可写时页面会明确显示“存储不可写”，不会假装保存成功；并发更新只允许一个旧凭据请求提交。若 hash-only 安装丢失明文 Token，停止 QPKG 后可用 Agent 的 `-reset-token` 本机维护命令恢复接入。
 
 ## MCP
 

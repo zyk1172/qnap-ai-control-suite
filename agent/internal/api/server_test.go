@@ -11,12 +11,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"qnap-ai-control-suite/agent/internal/approval"
 	"qnap-ai-control-suite/agent/internal/auth"
 	"qnap-ai-control-suite/agent/internal/config"
+	qexec "qnap-ai-control-suite/agent/internal/exec"
 	"qnap-ai-control-suite/agent/internal/jobs"
 )
 
@@ -89,6 +91,25 @@ func TestV2StatusSnapshotAndTextFileRoutes(t *testing.T) {
 	w = request(t, s, token, http.MethodPost, "/v1/files/grep", `{"path":"`+path+`","query":"needle"}`)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"line":2`) {
 		t.Fatalf("grep status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestThermalSnapshotHonorsOverallProbeBudget(t *testing.T) {
+	s, _ := testServer(t)
+	s.thermalRun = func(ctx context.Context, _ qexec.Request) (qexec.Result, error) {
+		<-ctx.Done()
+		return qexec.Result{}, ctx.Err()
+	}
+	started := time.Now()
+	result := s.thermalSnapshotWithBudget(context.Background(), 25*time.Millisecond)
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("thermal probe exceeded overall budget: %s", elapsed)
+	}
+	if result["partial"] != true || result["reason"] != "thermal probe timed out" {
+		t.Fatalf("unexpected thermal timeout result: %+v", result)
+	}
+	if result["available"] != false {
+		t.Fatalf("timed out thermal probe reported available: %+v", result)
 	}
 }
 
@@ -616,11 +637,11 @@ func TestTokenManagementRotatesAuthWithoutRestart(t *testing.T) {
 		t.Fatalf("status=%d body=%s", status.Code, status.Body.String())
 	}
 	reveal := request(t, s, oldToken, http.MethodPost, "/v1/admin/token/reveal", "")
-	if reveal.Code != http.StatusOK || !strings.Contains(reveal.Body.String(), oldToken) {
+	if reveal.Code != http.StatusOK || !strings.Contains(reveal.Body.String(), oldToken) || reveal.Header().Get("Cache-Control") != "no-store, private" || reveal.Header().Get("Pragma") != "no-cache" {
 		t.Fatalf("reveal status=%d body=%s", reveal.Code, reveal.Body.String())
 	}
 	updated := request(t, s, oldToken, http.MethodPut, "/v1/admin/token", `{"token":"`+newToken+`"}`)
-	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), newToken) {
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), newToken) || updated.Header().Get("Cache-Control") != "no-store, private" || updated.Header().Get("Pragma") != "no-cache" {
 		t.Fatalf("update status=%d body=%s", updated.Code, updated.Body.String())
 	}
 	if old := request(t, s, oldToken, http.MethodGet, "/v1/health", ""); old.Code != http.StatusUnauthorized {
@@ -642,6 +663,71 @@ func TestTokenManagementRotatesAuthWithoutRestart(t *testing.T) {
 	}
 	if strings.Contains(string(audit), oldToken) || strings.Contains(string(audit), newToken) {
 		t.Fatalf("token leaked into audit: %s", audit)
+	}
+}
+
+func TestTokenManagementSerializesConcurrentRotation(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	oldToken := "old-token-with-enough-length-123456"
+	firstToken := "first-token-with-enough-length-123456"
+	secondToken := "second-token-with-enough-length-123456"
+	cfg := config.FullTrust(auth.HashToken(oldToken))
+	cfg.Audit.Path = filepath.Join(dir, "audit.jsonl")
+	cfg.Jobs.JournalPath = filepath.Join(dir, "jobs.jsonl")
+	store := auth.NewTokenStore(configPath)
+	if _, err := store.Update(&cfg, oldToken); err != nil {
+		t.Fatal(err)
+	}
+	s := NewWithTokenStore(cfg, configPath, store)
+
+	start := make(chan struct{})
+	responses := make(chan *httptest.ResponseRecorder, 2)
+	var wg sync.WaitGroup
+	for _, token := range []string{firstToken, secondToken} {
+		wg.Add(1)
+		go func(nextToken string) {
+			defer wg.Done()
+			<-start
+			responses <- request(t, s, oldToken, http.MethodPut, "/v1/admin/token", `{"token":"`+nextToken+`"}`)
+		}(token)
+	}
+	close(start)
+	wg.Wait()
+	close(responses)
+
+	successes := 0
+	for response := range responses {
+		if response.Code == http.StatusOK {
+			successes++
+			continue
+		}
+		if response.Code != http.StatusUnauthorized || (!strings.Contains(response.Body.String(), `"stale_token"`) && !strings.Contains(response.Body.String(), `"unauthorized"`)) {
+			t.Fatalf("unexpected concurrent rotation response: status=%d body=%s", response.Code, response.Body.String())
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("expected exactly one successful rotation, got %d", successes)
+	}
+	winner := ""
+	for _, candidate := range []string{firstToken, secondToken} {
+		if s.Auth.Verify(candidate) {
+			winner = candidate
+			break
+		}
+	}
+	if winner == "" {
+		t.Fatal("neither concurrent rotation token became active")
+	}
+	if got, err := store.Read(); err != nil || got != winner {
+		t.Fatalf("persisted token=%q err=%v winner=%q", got, err, winner)
+	}
+	loaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Auth.TokenSHA256 != auth.HashToken(winner) || s.Config.Auth.TokenSHA256 != auth.HashToken(winner) {
+		t.Fatalf("config hashes diverged: persisted=%q runtime=%q", loaded.Auth.TokenSHA256, s.Config.Auth.TokenSHA256)
 	}
 }
 

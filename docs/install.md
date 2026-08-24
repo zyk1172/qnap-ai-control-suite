@@ -23,9 +23,15 @@ dist/QnapAIControl_2.1.0.qpkg.md5
 1. 上传正式 `.qpkg` 并安装。
 2. 启动 `QNAP AI Control`。
 3. 打开 `http://NAS_IP:8756/`。
-4. 使用当前 Bearer Token 打开 WebUI。v2.1 的正式 Token 文件是 `/etc/config/qnap-ai-control-agent/token`，权限为 `0600`；`initial-token.txt` 只作为旧版本迁移来源。
+4. 使用当前 Bearer Token 打开 WebUI。v2.1 的正式 Token 文件是 `/etc/config/qnap-ai-control-agent/token`，权限为 `0600`；新安装不创建 `initial-token.txt`，旧版本该文件只有在与 `config.json` hash 匹配时才由 Go Agent 迁移并移除。
 
-WebUI 管理端点要求当前 Bearer Token。本项目不会假设 QNAP App Center 打开的页面自动提供可信 QTS session。如果旧系统只有 `config.json` 中的 hash、明文 Token 文件已丢失，则无法反推出 Token；请在受信任的本机环境重新生成 Token。
+WebUI 管理端点要求当前 Bearer Token。本项目不会假设 QNAP App Center 打开的页面自动提供可信 QTS session；当前 QPKG 的 `QPKG_WEBUI=/` 是直接 8756 服务，没有经过已验证的 QTS 身份代理。如果旧系统只有 `config.json` 中的 hash、明文 Token 文件已丢失，则无法反推出 Token；停止 QPKG 后可在 NAS 本机以有权访问配置目录的用户执行：
+
+```bash
+/path/to/qnap-ai-control-agent -config /etc/config/qnap-ai-control-agent/config.json -reset-token
+```
+
+命令会原子更新 Token 与 hash，并将新 Token 输出到当前终端；随后重新启动 QPKG。
 
 Token 设置前会检查 Token 目录和 `config.json` 所在目录是否能够创建、同步和原子替换临时文件。检查失败会返回“存储不可写”，不切换运行时认证 hash，也不删除旧 Token。成功更新后旧 Token 立即失效。
 
