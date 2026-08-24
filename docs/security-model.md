@@ -16,4 +16,6 @@ v1 的 `confirmation` 仅为迁移兼容字段。没有 `approval` 的 v1 配置
 
 敏感请求返回一次性 `approval_id`，它绑定 method、path 和 canonical JSON 参数，10 分钟后过期且只能消费一次。MCP Bridge 将 `approval_required` 转为标准 MCP elicitation，用户批准后由 Bridge 内部调用 decision endpoint，再自动重试一次完全相同的原始 HTTP 请求；模型不能调用批准接口或自行批准。篡改、重放、过期和拒绝均会失败。不支持交互审批的客户端会 fail closed。
 
+`raw` toolset 是有意保留的 break-glass 逃生舱。`nas_exec`/`nas_shell` 在 full_trust 下拥有完整 root 命令能力，当前危险命令识别只能覆盖已知模式，不能保证识别所有通过其他 QNAP 命令、解释器或脚本实现的破坏路径。若需要绝对审批边界，必须将 raw 命令整体归类为 SENSITIVE。
+
 无论 profile 如何，所有操作均应保留 agent audit log。不要将 token、容器环境变量、私钥或备份数据提交到 GitHub。

@@ -60,6 +60,8 @@ Mac 上安装 Node 20+，然后在 Codex、OpenClaw 或 Hermes 中加入：
 
 Bridge 对 Hermes 式 `action=accept` + 空 `content` 兼容为“允许这一次”；`decline` 和 `cancel` 会记录拒绝。批准接口 `/v1/approvals/{approval_id}/decision` 是 Bridge/用户交互层的 HTTP 控制流，不会出现在 MCP tools/list 中。
 
+审批交互默认最多等待 300 秒，并按 NAS ticket 的剩余有效期裁剪；可通过 `QACS_APPROVAL_TIMEOUT_MS` 调整，Bridge 会将其限制在 9 分钟以内。
+
 当前仓库固定使用已验证的 `@modelcontextprotocol/sdk@1.30.0`。它协商支持的 2025 MCP protocol versions；对尚未被该 SDK 识别的未来版本会按 SDK 行为回落到当前支持的版本，不宣称提供未验证的 2026 专属协议能力。Bridge 的审批闭环只依赖已验证的标准 form-mode elicitation。
 
 ## 长任务与 Job

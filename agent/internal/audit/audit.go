@@ -26,6 +26,8 @@ type Event struct {
 	Target             string     `json:"target,omitempty"`
 	JobID              string     `json:"job_id,omitempty"`
 	ApprovalID         string     `json:"approval_id,omitempty"`
+	ApprovalEvent      string     `json:"approval_event,omitempty"`
+	ApprovalStatus     string     `json:"approval_status,omitempty"`
 	ApprovalCreatedAt  *time.Time `json:"approval_created_at,omitempty"`
 	ApprovalDecisionAt *time.Time `json:"approval_decision_at,omitempty"`
 	ApprovalExecutedAt *time.Time `json:"approval_executed_at,omitempty"`

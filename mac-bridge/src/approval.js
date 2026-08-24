@@ -1,4 +1,6 @@
 import { request, retryRequest } from "./client.js";
+import { approvalRequestTimeoutMs } from "./config.js";
+import { ElicitResultSchema } from "@modelcontextprotocol/sdk/types.js";
 
 export const unsupportedApprovalMessage = "Sensitive operation requires explicit user approval, but the current MCP client does not support interactive approval.";
 
@@ -79,7 +81,8 @@ export async function requestUserApproval(server, ticket) {
   if (!supportsFormElicitation(server)) {
     throw new ApprovalFlowError("approval_interaction_unavailable", unsupportedApprovalMessage, ticket);
   }
-  const result = await server.server.elicitInput({
+  const timeout = approvalTimeoutForTicket(ticket);
+  const params = {
     mode: "form",
     message: approvalMessage(ticket),
     // The decision field is optional on purpose. A client such as Hermes may
@@ -96,25 +99,51 @@ export async function requestUserApproval(server, ticket) {
         }
       }
     }
-  });
+  };
+  const options = { timeout, maxTotalTimeout: timeout };
+  const result = isBareFormElicitation(server)
+    ? await server.server.request({ method: "elicitation/create", params: { message: params.message, requestedSchema: params.requestedSchema } }, ElicitResultSchema, options)
+    : await server.server.elicitInput(params, options);
   return decisionFromResult(result, ticket);
+}
+
+export function approvalTimeoutForTicket(ticket, now = Date.now()) {
+  const configured = approvalRequestTimeoutMs();
+  const expiresAt = Date.parse(ticket?.expires_at || "");
+  if (!Number.isFinite(expiresAt)) return configured;
+  return Math.max(1, Math.min(configured, expiresAt - now));
 }
 
 export function supportsFormElicitation(server) {
   const protocol = server?.server;
   const capabilities = protocol?.getClientCapabilities?.();
-  return typeof protocol?.elicitInput === "function" && capabilities?.elicitation?.form !== undefined;
+  const elicitation = capabilities?.elicitation;
+  if (typeof protocol?.elicitInput !== "function" || !elicitation || typeof elicitation !== "object" || Array.isArray(elicitation)) return false;
+  // MCP 2025 compatibility: a bare elicitation object means form support.
+  if (Object.keys(elicitation).length === 0) return true;
+  return elicitation.form !== undefined;
 }
 
-function decisionFromResult(result, ticket) {
+function isBareFormElicitation(server) {
+  const elicitation = server?.server?.getClientCapabilities?.()?.elicitation;
+  return Boolean(elicitation && typeof elicitation === "object" && !Array.isArray(elicitation) && Object.keys(elicitation).length === 0);
+}
+
+export function decisionFromResult(result, ticket) {
+  const action = result?.action;
+  if (action === "decline" || action === "cancel") return "deny";
+  if (action !== "accept") {
+    throw new ApprovalFlowError("approval_invalid_response", "The client returned an invalid approval response; the operation was not executed.", ticket);
+  }
   const content = result?.content;
+  if (!content || (typeof content === "object" && Object.keys(content).length === 0)) return "approve";
   const explicit = typeof content?.decision === "string" ? content.decision.toLowerCase() : undefined;
-  if (explicit === "approve" || explicit === "approved") return "approve";
   if (explicit === "deny" || explicit === "denied") return "deny";
+  if (explicit === "approve" || explicit === "approved") return "approve";
   if (typeof content?.approved === "boolean") return content.approved ? "approve" : "deny";
-  if (result?.action === "accept") return "approve";
-  if (result?.action === "decline" || result?.action === "cancel") return "deny";
-  throw new ApprovalFlowError("approval_invalid_response", "The client returned an invalid approval response; the operation was not executed.", ticket);
+  // action=accept is itself an explicit user acceptance. This also keeps
+  // compatibility with clients that return extra, non-decision content.
+  return "approve";
 }
 
 function normalizeTicket(value = {}) {

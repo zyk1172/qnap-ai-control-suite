@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import test from "node:test";
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
+import { approvalTimeoutForTicket, decisionFromResult, requestUserApproval } from "../src/approval.js";
 
 const bridgeCwd = new URL("..", import.meta.url);
 
@@ -12,7 +13,7 @@ test("sensitive tool uses elicitation, records approval, and retries the exact r
   try {
     const harness = await startBridge(fixture.baseUrl);
     try {
-      await initialize(harness, { elicitation: { form: {} } });
+      await initialize(harness, { elicitation: {} });
       const call = harness.request("tools/call", { name: "nas_power", arguments: { action: "reboot", idempotency_key: "idem-1" } });
       const elicitation = await harness.waitFor("elicitation/create");
       assert.equal(elicitation.params.mode, "form");
@@ -22,7 +23,7 @@ test("sensitive tool uses elicitation, records approval, and retries the exact r
       harness.respond(elicitation.id, { action: "accept", content: {} });
 
       const result = (await call).result;
-      assert.equal(result.isError, false);
+      assert.equal(result.isError, false, JSON.stringify(result));
       assert.deepEqual(result.structuredContent, { action: "reboot", executed: true });
       assert.deepEqual(fixture.records.map((record) => record.url), [
         "/v1/system/power",
@@ -89,9 +90,46 @@ test("unsupported elicitation fails closed without deciding or retrying", async 
   }
 });
 
+test("top-level decline cannot be overridden by an approving content field", () => {
+  assert.equal(decisionFromResult({ action: "decline", content: { decision: "approve" } }, { approval_id: "ticket-1" }), "deny");
+});
+
+test("top-level cancel cannot be overridden by an approving boolean", () => {
+  assert.equal(decisionFromResult({ action: "cancel", content: { approved: true } }, { approval_id: "ticket-1" }), "deny");
+});
+
+test("content cannot approve without an explicit accept action", () => {
+  assert.throws(
+    () => decisionFromResult({ content: { decision: "approve" } }, { approval_id: "ticket-1" }),
+    (error) => error.code === "approval_invalid_response"
+  );
+});
+
+test("approval elicitation uses a bounded, ticket-aware timeout", async () => {
+  let receivedOptions;
+  const fakeServer = {
+    server: {
+      getClientCapabilities: () => ({ elicitation: { form: {} } }),
+      elicitInput: async (_params, options) => {
+        receivedOptions = options;
+        return { action: "accept", content: {} };
+      }
+    }
+  };
+  const nearExpiry = new Date(Date.now() + 60_000).toISOString();
+  assert.equal(await requestUserApproval(fakeServer, { expires_at: nearExpiry }), "approve");
+  assert.ok(receivedOptions.timeout > 59_000 && receivedOptions.timeout <= 60_000);
+  assert.equal(receivedOptions.maxTotalTimeout, receivedOptions.timeout);
+  const now = Date.parse("2026-08-24T00:00:00Z");
+  assert.equal(approvalTimeoutForTicket({ expires_at: "2026-08-24T00:05:00Z" }, now), 300_000);
+  assert.equal(approvalTimeoutForTicket({ expires_at: "2026-08-23T23:59:00Z" }, now), 1);
+});
+
 async function createFixture() {
   const records = [];
   let powerAttempts = 0;
+  const createdAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 600_000).toISOString();
   const server = createServer(async (request, response) => {
     const body = await readBody(request);
     records.push({ url: request.url, method: request.method, headers: request.headers, body });
@@ -111,8 +149,8 @@ async function createFixture() {
               target: "reboot",
               summary: "sensitive system.power target=reboot",
               state: "pending",
-              created_at: "2026-08-24T00:00:00Z",
-              expires_at: "2026-08-24T00:10:00Z"
+              created_at: createdAt,
+              expires_at: expiresAt
             }
           }
         });

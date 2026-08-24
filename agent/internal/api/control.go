@@ -146,27 +146,31 @@ func (s *Server) auditOperation(r *http.Request, op operations.Operation, status
 	event := audit.Event{RequestID: rc(r).id, Remote: r.RemoteAddr, Tool: r.URL.Path, Action: op.Name, Risk: string(op.Risk), Target: op.Target, Status: result, Args: map[string]any{"summary": op.Summary, "resource": op.Resource, "dry_run": op.DryRun}, DurationMS: time.Since(rc(r).started).Milliseconds()}
 	if approvalEvent, ok := r.Context().Value(approvalAuditContextKey{}).(approvalAuditContext); ok {
 		event.ApprovalID = approvalEvent.ID
-		event.Status = approvalEvent.Status
+		event.ApprovalEvent = approvalEvent.Status
 		if approvalEvent.Ticket != nil {
 			event.RequestID = approvalEvent.Ticket.RequestID
+			event.ApprovalStatus = string(approvalEvent.Ticket.State)
 			event.ApprovalCreatedAt = &approvalEvent.Ticket.CreatedAt
 			event.ApprovalDecisionAt = approvalEvent.Ticket.DecisionAt
 		}
 		if approvalEvent.Status == "approval_executed" {
 			executedAt := time.Now().UTC()
 			event.ApprovalExecutedAt = &executedAt
+		} else {
+			event.Status = approvalEvent.Status
 		}
 	}
 	s.Audit.Write(event)
 }
 
 func (s *Server) auditApprovalDecision(r *http.Request, id, decision, status string, ticket *approval.Ticket) {
-	event := audit.Event{RequestID: rc(r).id, Remote: r.RemoteAddr, Tool: r.URL.Path, Action: "approval.decision", Status: status, ApprovalID: id, Args: map[string]any{"decision": decision}, DurationMS: time.Since(rc(r).started).Milliseconds()}
+	event := audit.Event{RequestID: rc(r).id, Remote: r.RemoteAddr, Tool: r.URL.Path, Action: "approval.decision", Status: status, ApprovalID: id, ApprovalEvent: status, Args: map[string]any{"decision": decision}, DurationMS: time.Since(rc(r).started).Milliseconds()}
 	if ticket != nil {
 		event.RequestID = ticket.RequestID
 		event.Action = ticket.Operation
 		event.Risk = string(ticket.Risk)
 		event.Target = ticket.Target
+		event.ApprovalStatus = string(ticket.State)
 		event.ApprovalCreatedAt = &ticket.CreatedAt
 		event.ApprovalDecisionAt = ticket.DecisionAt
 	}

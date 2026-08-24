@@ -398,14 +398,16 @@ func TestSensitiveDryRunRequiresApprovalThenConsumesTicket(t *testing.T) {
 		t.Fatal(err)
 	}
 	auditText := string(auditData)
-	for _, status := range []string{`"status":"approval_requested"`, `"status":"approval_not_approved"`, `"status":"approval_approved"`, `"status":"approval_executed"`, `"status":"approval_used"`} {
-		if !strings.Contains(auditText, status) || !strings.Contains(auditText, first.Error.Details.ID) {
-			t.Fatalf("audit missing %s for approval %s: %s", status, first.Error.Details.ID, auditText)
+	for _, event := range []string{"approval_requested", "approval_not_approved", "approval_approved", "approval_executed", "approval_used"} {
+		if !strings.Contains(auditText, `"approval_event":"`+event+`"`) || !strings.Contains(auditText, first.Error.Details.ID) {
+			t.Fatalf("audit missing %s for approval %s: %s", event, first.Error.Details.ID, auditText)
 		}
 	}
 	type approvalAuditRecord struct {
 		RequestID          string     `json:"request_id"`
 		ApprovalID         string     `json:"approval_id"`
+		ApprovalEvent      string     `json:"approval_event"`
+		ApprovalStatus     string     `json:"approval_status"`
 		Status             string     `json:"status"`
 		ApprovalCreatedAt  *time.Time `json:"approval_created_at"`
 		ApprovalDecisionAt *time.Time `json:"approval_decision_at"`
@@ -418,13 +420,13 @@ func TestSensitiveDryRunRequiresApprovalThenConsumesTicket(t *testing.T) {
 			t.Fatalf("invalid audit record %q: %v", line, err)
 		}
 		if record.ApprovalID == first.Error.Details.ID {
-			records[record.Status] = record
+			records[record.ApprovalEvent] = record
 		}
 	}
 	requestedRecord := records["approval_requested"]
 	approvedRecord := records["approval_approved"]
 	executedRecord := records["approval_executed"]
-	if requestedRecord.RequestID == "" || approvedRecord.RequestID != requestedRecord.RequestID || executedRecord.RequestID != requestedRecord.RequestID || requestedRecord.ApprovalCreatedAt == nil || approvedRecord.ApprovalDecisionAt == nil || executedRecord.ApprovalExecutedAt == nil {
+	if requestedRecord.RequestID == "" || approvedRecord.RequestID != requestedRecord.RequestID || executedRecord.RequestID != requestedRecord.RequestID || requestedRecord.ApprovalCreatedAt == nil || approvedRecord.ApprovalDecisionAt == nil || executedRecord.ApprovalExecutedAt == nil || executedRecord.Status != "success" || executedRecord.ApprovalStatus != "used" {
 		t.Fatalf("approval audit lifecycle is not correlated: requested=%+v approved=%+v executed=%+v", requestedRecord, approvedRecord, executedRecord)
 	}
 }
@@ -464,6 +466,63 @@ func TestSensitiveApprovalDecisionDenyPreventsRetry(t *testing.T) {
 	}
 	if !strings.Contains(string(auditData), `"status":"approval_denied"`) || !strings.Contains(string(auditData), envelope.Error.Details.ID) {
 		t.Fatalf("deny decision was not audited: %s", auditData)
+	}
+}
+
+func TestSensitiveApprovalAuditPreservesExecutionFailure(t *testing.T) {
+	s, token := testServer(t)
+	body := `{"argv":["/definitely/missing/mkfs.qacs-test"]}`
+	first := request(t, s, token, http.MethodPost, "/v1/exec", body)
+	var envelope struct {
+		Error struct {
+			Details struct {
+				ID string `json:"approval_id"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if first.Code != http.StatusConflict || json.Unmarshal(first.Body.Bytes(), &envelope) != nil || envelope.Error.Details.ID == "" {
+		t.Fatalf("approval response status=%d body=%s", first.Code, first.Body.String())
+	}
+	decision := request(t, s, token, http.MethodPost, "/v1/approvals/"+envelope.Error.Details.ID+"/decision", `{"decision":"approve"}`)
+	if decision.Code != http.StatusOK {
+		t.Fatalf("decision status=%d body=%s", decision.Code, decision.Body.String())
+	}
+	r := httptest.NewRequest(http.MethodPost, "/v1/exec", strings.NewReader(body))
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set(approvalHeader, envelope.Error.Details.ID)
+	retry := httptest.NewRecorder()
+	s.Handler().ServeHTTP(retry, r)
+	if retry.Code != http.StatusForbidden || !strings.Contains(retry.Body.String(), `"start_failed"`) {
+		t.Fatalf("failed execution status=%d body=%s", retry.Code, retry.Body.String())
+	}
+
+	auditData, err := os.ReadFile(s.Config.Audit.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var executed struct {
+		ApprovalEvent  string `json:"approval_event"`
+		ApprovalStatus string `json:"approval_status"`
+		Status         string `json:"status"`
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(auditData)), "\n") {
+		var record struct {
+			ApprovalID     string `json:"approval_id"`
+			ApprovalEvent  string `json:"approval_event"`
+			ApprovalStatus string `json:"approval_status"`
+			Status         string `json:"status"`
+		}
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("invalid audit record %q: %v", line, err)
+		}
+		if record.ApprovalID == envelope.Error.Details.ID && record.ApprovalEvent == "approval_executed" {
+			executed.ApprovalEvent = record.ApprovalEvent
+			executed.ApprovalStatus = record.ApprovalStatus
+			executed.Status = record.Status
+		}
+	}
+	if executed.ApprovalEvent != "approval_executed" || executed.ApprovalStatus != "used" || executed.Status != "failed" {
+		t.Fatalf("execution failure audit was misclassified: %+v", executed)
 	}
 }
 

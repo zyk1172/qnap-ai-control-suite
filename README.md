@@ -10,6 +10,7 @@ v2.0.0 在保留可信 LAN `full_trust` 控制能力的基础上，增加独立�
 - 敏感操作由 MCP Bridge 捕获 `approval_required`，通过标准 MCP elicitation 请求用户“允许这一次/拒绝”；批准后 Bridge 记录 decision，并只自动重试一次完全相同的原始请求。模型没有批准工具；不支持交互审批的客户端会 fail closed。所有操作记录 request ID、风险、目标、审批/Job、状态、耗时和脱敏摘要。
 - Job 最多并发 4 个，支持资源锁、idempotency key、JSONL journal、重启后 `interrupted`，并以进程组 `SIGTERM` → 5 秒 → `SIGKILL` 取消子进程树。
 - MCP 默认只公开 `core`；通过 `QACS_TOOLSETS=files,docker,storage,network,qnap,admin,raw,compat` 按需启用其余工具与旧 alias。
+- `raw` 是 break-glass 完整底层控制模式，包含 `nas_exec`/`nas_shell` 等 root 能力；危险命令识别是有限启发式，不承诺覆盖所有等价破坏路径。需要完整控制时启用它，并将其视为绕过结构化审批的高级能力。
 - 新增 `nas_status_snapshot`、文本/按行/grep 文件读取、原子写/CAS/backup/目录树同步、IPv6、进程与磁盘指标、SMB 状态、Docker health/Compose inventory。Docker reconstruction 明确报告是否无损以及缺失字段。
 - QPKG inventory 单次扫描 `/proc`；QTS 私有写能力仍只能在真机 probe 和显式 argv 模板均验证后注册。
 
