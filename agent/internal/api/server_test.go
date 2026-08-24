@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -22,6 +23,7 @@ func testServer(t *testing.T) (*Server, string) {
 	sum := sha256.Sum256([]byte(token))
 	cfg := config.FullTrust(hex.EncodeToString(sum[:]))
 	cfg.Audit.Path = t.TempDir() + "/audit.jsonl"
+	cfg.Jobs.JournalPath = t.TempDir() + "/jobs.jsonl"
 	return New(cfg), token
 }
 func request(t *testing.T, s *Server, token, method, path, body string) *httptest.ResponseRecorder {
@@ -57,6 +59,43 @@ func TestAuthAndEnvelope(t *testing.T) {
 	}
 	if !ok.OK || ok.Data == nil || ok.Meta.RequestID == "" {
 		t.Fatalf("ok=%+v", ok)
+	}
+}
+
+func TestV2StatusSnapshotAndTextFileRoutes(t *testing.T) {
+	s, token := testServer(t)
+	w := request(t, s, token, http.MethodGet, "/v1/status/snapshot", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"resources"`) || !strings.Contains(w.Body.String(), `"jobs"`) {
+		t.Fatalf("snapshot status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	path := t.TempDir() + "/notes.txt"
+	data := base64.StdEncoding.EncodeToString([]byte("first line\nneedle line\nlast line\n"))
+	w = request(t, s, token, http.MethodPost, "/v1/files/write", `{"path":"`+path+`","content_base64":"`+data+`","backup":true}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"sha256"`) {
+		t.Fatalf("write status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, s, token, http.MethodPost, "/v1/files/read-text", `{"path":"`+path+`"}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "needle line") || strings.Contains(w.Body.String(), "content_base64") {
+		t.Fatalf("read-text status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, s, token, http.MethodPost, "/v1/files/read-lines", `{"path":"`+path+`","start":1,"limit":1}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"needle line"`) {
+		t.Fatalf("read-lines status=%d body=%s", w.Code, w.Body.String())
+	}
+	w = request(t, s, token, http.MethodPost, "/v1/files/grep", `{"path":"`+path+`","query":"needle"}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"line":2`) {
+		t.Fatalf("grep status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestV2OptionalTelemetryRoutesAreRegistered(t *testing.T) {
+	s, token := testServer(t)
+	for _, path := range []string{"/v1/storage/disk-io", "/v1/network/ipv6/routes", "/v1/network/ipv6/neighbors", "/v1/shares/smb-status"} {
+		w := request(t, s, token, http.MethodGet, path, "")
+		if w.Code == http.StatusNotFound {
+			t.Fatalf("route %s was not registered: %s", path, w.Body.String())
+		}
 	}
 }
 func TestCommandNonZeroIsNotSuccess(t *testing.T) {
@@ -124,6 +163,15 @@ func TestStructuredSystemResourcesAndJobs(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "queued") {
 		t.Fatalf("job status=%d body=%s", w.Code, w.Body.String())
 	}
+	var response struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil || response.Data.ID == "" {
+		t.Fatalf("unable to read queued job id: err=%v body=%s", err, w.Body.String())
+	}
+	waitForAPIJobStatus(t, s, response.Data.ID, jobs.Succeeded)
 }
 
 func TestJobLogsArePagedAndHiddenFromMetadata(t *testing.T) {
@@ -157,6 +205,49 @@ func TestJobStartSupportsExplicitShellAndBase64Stdin(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"kind":"shell-test"`) || !strings.Contains(w.Body.String(), `"status":"queued"`) {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
+	var response struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil || response.Data.ID == "" {
+		t.Fatalf("unable to read queued job id: err=%v body=%s", err, w.Body.String())
+	}
+	current := waitForAPIJobStatus(t, s, response.Data.ID, jobs.Succeeded)
+	lines, _, _, _ := s.Jobs.Logs(current.ID, 0, 10)
+	if strings.Join(lines, "") != "hello" {
+		t.Fatalf("job output=%q", lines)
+	}
+}
+
+func waitForAPIJobStatus(t *testing.T, s *Server, id string, wanted jobs.Status) jobs.Job {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		current, ok := s.Jobs.Get(id)
+		if ok && current.Status == wanted {
+			return current
+		}
+		time.Sleep(time.Millisecond)
+	}
+	current, _ := s.Jobs.Get(id)
+	t.Fatalf("job %s did not finish with %s: %#v", id, wanted, current)
+	return jobs.Job{}
+}
+
+func waitForAPIJobTerminal(t *testing.T, s *Server, id string) jobs.Job {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		current, ok := s.Jobs.Get(id)
+		if ok && current.Status != jobs.Queued && current.Status != jobs.Running {
+			return current
+		}
+		time.Sleep(time.Millisecond)
+	}
+	current, _ := s.Jobs.Get(id)
+	t.Fatalf("job %s did not reach a terminal state: %#v", id, current)
+	return jobs.Job{}
 }
 
 func TestSystemInfoIncludesQNAPDiscoverySummary(t *testing.T) {
@@ -198,9 +289,97 @@ func TestQPKGDryRunUsesDocumentedFlags(t *testing.T) {
 
 func TestQPKGAsyncQueuesAJobWithoutRunningQPKGOnRequest(t *testing.T) {
 	s, token := testServer(t)
+	// Hold the matching resource lock so this unit test proves queueing without
+	// ever invoking a real QPKG command. Disable test-only audit output so the
+	// terminal journal write is the only filesystem lifecycle to synchronize.
+	s.Audit.Enabled = false
+	release := make(chan struct{})
+	blocker, reused := s.Jobs.StartWithOptions(jobs.StartOptions{Kind: "test-resource-lock", Resource: "qpkg:container-station"}, func(ctx context.Context, _ func(string)) (any, error) {
+		select {
+		case <-release:
+			return nil, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+	if reused {
+		t.Fatal("resource-lock job unexpectedly reused")
+	}
+	waitForAPIJobStatus(t, s, blocker.ID, jobs.Running)
+	var qpkgJobID string
+	defer func() {
+		if qpkgJobID != "" {
+			s.Jobs.Cancel(qpkgJobID)
+			waitForAPIJobTerminal(t, s, qpkgJobID)
+		}
+		s.Jobs.Cancel(blocker.ID)
+		close(release)
+		waitForAPIJobTerminal(t, s, blocker.ID)
+	}()
 	w := request(t, s, token, http.MethodPost, "/v1/qnap/qpkg/manage", `{"name":"container-station","action":"start","async":true}`)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"kind":"qpkg.start"`) || !strings.Contains(w.Body.String(), `"progress":0`) {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"kind":"qpkg.start"`) || !strings.Contains(w.Body.String(), `"status":"queued"`) {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil || response.Data.ID == "" {
+		t.Fatalf("unable to read queued job id: err=%v body=%s", err, w.Body.String())
+	}
+	qpkgJobID = response.Data.ID
+	if current, ok := s.Jobs.Get(qpkgJobID); !ok || current.Status != jobs.Queued {
+		t.Fatalf("qpkg job ran before response: %#v exists=%v", current, ok)
+	}
+	if !s.Jobs.Cancel(qpkgJobID) {
+		t.Fatal("unable to cancel queued qpkg job")
+	}
+	if completed := waitForAPIJobTerminal(t, s, qpkgJobID); completed.Status != jobs.Cancelled {
+		t.Fatalf("qpkg job status=%s, want cancelled", completed.Status)
+	}
+}
+
+func TestSensitiveDryRunRequiresApprovalThenConsumesTicket(t *testing.T) {
+	s, token := testServer(t)
+	body := `{"name":"example","action":"remove","dry_run":true}`
+	w := request(t, s, token, http.MethodPost, "/v1/qnap/qpkg/manage", body)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected approval required, status=%d body=%s", w.Code, w.Body.String())
+	}
+	var first struct {
+		OK    bool `json:"ok"`
+		Error struct {
+			Code    string `json:"code"`
+			Details struct {
+				ID string `json:"approval_id"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.OK || first.Error.Code != "approval_required" || first.Error.Details.ID == "" {
+		t.Fatalf("unexpected approval response: %s", w.Body.String())
+	}
+	// The user-facing approval happens in the client conversation. The same
+	// request carries this one-time ID on its retry; no decision endpoint is
+	// required in the main execution path.
+	r := httptest.NewRequest(http.MethodPost, "/v1/qnap/qpkg/manage", strings.NewReader(body))
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set(approvalHeader, first.Error.Details.ID)
+	approved := httptest.NewRecorder()
+	s.Handler().ServeHTTP(approved, r)
+	if approved.Code != http.StatusOK || !strings.Contains(approved.Body.String(), `"dry_run":true`) {
+		t.Fatalf("approved retry status=%d body=%s", approved.Code, approved.Body.String())
+	}
+	r = httptest.NewRequest(http.MethodPost, "/v1/qnap/qpkg/manage", strings.NewReader(body))
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set(approvalHeader, first.Error.Details.ID)
+	replayed := httptest.NewRecorder()
+	s.Handler().ServeHTTP(replayed, r)
+	if replayed.Code != http.StatusConflict || !strings.Contains(replayed.Body.String(), `"approval_used"`) {
+		t.Fatalf("replay status=%d body=%s", replayed.Code, replayed.Body.String())
 	}
 }
 

@@ -2,6 +2,7 @@ package exec
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"strings"
 	"testing"
@@ -59,6 +60,28 @@ func TestExecutorDryRun(t *testing.T) {
 	r, err := (Executor{}).Run(context.Background(), Request{Argv: []string{"does-not-run"}, DryRun: true})
 	if err != nil || !r.DryRun {
 		t.Fatalf("unexpected %+v %v", r, err)
+	}
+}
+func TestExecutorCancellationTerminatesProcessGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process groups are unix only")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := (Executor{}).Run(ctx, Request{Argv: []string{"/bin/sh", "-c", "sleep 30 & wait"}, Timeout: time.Minute})
+		done <- err
+	}()
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		var commandErr *CommandError
+		if !errors.As(err, &commandErr) || commandErr.Kind != Cancelled || !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected cancelled command error, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("process group did not stop after cancellation")
 	}
 }
 func errorsAs(err error, target **CommandError) bool {

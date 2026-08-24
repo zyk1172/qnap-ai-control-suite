@@ -7,6 +7,7 @@ type ErrorKind string
 const (
 	NotFound    ErrorKind = "not_found"
 	TimedOut    ErrorKind = "timeout"
+	Cancelled   ErrorKind = "cancelled"
 	NonZeroExit ErrorKind = "non_zero_exit"
 	StartFailed ErrorKind = "start_failed"
 )

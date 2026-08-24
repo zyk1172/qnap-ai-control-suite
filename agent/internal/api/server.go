@@ -21,11 +21,13 @@ import (
 	"syscall"
 	"time"
 
+	"qnap-ai-control-suite/agent/internal/approval"
 	"qnap-ai-control-suite/agent/internal/audit"
 	"qnap-ai-control-suite/agent/internal/config"
 	qexec "qnap-ai-control-suite/agent/internal/exec"
 	"qnap-ai-control-suite/agent/internal/files"
 	"qnap-ai-control-suite/agent/internal/jobs"
+	"qnap-ai-control-suite/agent/internal/operations"
 	"qnap-ai-control-suite/agent/internal/qnap/discovery"
 	"qnap-ai-control-suite/agent/internal/qnap/docker"
 	"qnap-ai-control-suite/agent/internal/qnap/ecosystem"
@@ -39,24 +41,26 @@ import (
 )
 
 type Server struct {
-	Config    config.Config
-	Exec      qexec.Executor
-	Files     files.Service
-	Jobs      *jobs.Manager
-	Audit     *audit.Logger
-	Docker    docker.Service
-	QPKG      qpkg.Service
-	Discovery discovery.Service
-	System    qsystem.Service
-	Network   qnetwork.Service
-	Storage   storage.Service
-	Users     users.Service
-	Shares    shares.Service
-	Logs      logs.Service
-	Ecosystem ecosystem.Service
-	ProbePath string
-	started   time.Time
-	hostname  string
+	Config     config.Config
+	Exec       qexec.Executor
+	Files      files.Service
+	Jobs       *jobs.Manager
+	Audit      *audit.Logger
+	Operations operations.Registry
+	Approvals  *approval.Manager
+	Docker     docker.Service
+	QPKG       qpkg.Service
+	Discovery  discovery.Service
+	System     qsystem.Service
+	Network    qnetwork.Service
+	Storage    storage.Service
+	Users      users.Service
+	Shares     shares.Service
+	Logs       logs.Service
+	Ecosystem  ecosystem.Service
+	ProbePath  string
+	started    time.Time
+	hostname   string
 }
 
 // Version is injected by scripts/build_agent.sh from the repository VERSION file.
@@ -85,7 +89,13 @@ type requestContext struct {
 func New(cfg config.Config) *Server {
 	executor := qexec.Executor{DefaultTimeout: cfg.Timeout(), MaxOutput: cfg.Command.MaxOutputBytes}
 	host, _ := os.Hostname()
-	return &Server{Config: cfg, Exec: executor, Files: files.Service{Roots: cfg.Permissions.AllowedRoots, MaxInlineBytes: cfg.Files.MaxInlineBytes}, Jobs: jobs.New(cfg.Jobs.MaxHistory), Audit: &audit.Logger{Enabled: cfg.Audit.Enabled, Path: cfg.Audit.Path}, Docker: docker.Service{Exec: executor, Paths: cfg.DockerPaths, RedactSecrets: cfg.Privacy.RedactSecrets}, QPKG: qpkg.Service{Exec: executor}, Discovery: discovery.Service{Exec: executor}, System: qsystem.Service{Exec: executor}, Network: qnetwork.Service{Exec: executor}, Storage: storage.Service{Exec: executor}, Users: users.Service{Exec: executor}, Shares: shares.Service{Exec: executor}, Logs: logs.Service{AuditPath: cfg.Audit.Path, ServicePath: "/var/log/qnap-ai-control-agent/service.log"}, Ecosystem: ecosystem.Service{Discovery: discovery.Service{Exec: executor}, Exec: executor, Adapters: cfg.QNAPAdapters}, ProbePath: defaultProbePath(), started: time.Now(), hostname: host}
+	auditRedaction := true
+	if cfg.Audit.RedactSecrets != nil {
+		auditRedaction = *cfg.Audit.RedactSecrets
+	}
+	server := &Server{Config: cfg, Exec: executor, Files: files.Service{Roots: cfg.Permissions.AllowedRoots, MaxInlineBytes: cfg.Files.MaxInlineBytes}, Audit: &audit.Logger{Enabled: cfg.Audit.Enabled, Path: cfg.Audit.Path, RedactSecrets: auditRedaction}, Operations: operations.New(), Approvals: approval.New(time.Duration(cfg.Approval.TTLSeconds) * time.Second), Docker: docker.Service{Exec: executor, Paths: cfg.DockerPaths, RedactSecrets: cfg.Privacy.RedactSecrets}, QPKG: qpkg.Service{Exec: executor}, Discovery: discovery.Service{Exec: executor}, System: qsystem.Service{Exec: executor}, Network: qnetwork.Service{Exec: executor}, Storage: storage.Service{Exec: executor}, Users: users.Service{Exec: executor}, Shares: shares.Service{Exec: executor}, Logs: logs.Service{AuditPath: cfg.Audit.Path, ServicePath: "/var/log/qnap-ai-control-agent/service.log"}, Ecosystem: ecosystem.Service{Discovery: discovery.Service{Exec: executor}, Exec: executor, Adapters: cfg.QNAPAdapters}, ProbePath: defaultProbePath(), started: time.Now(), hostname: host}
+	server.Jobs = jobs.NewWithOptions(jobs.Options{MaxHistory: cfg.Jobs.MaxHistory, MaxConcurrent: cfg.Jobs.MaxConcurrent, JournalPath: cfg.Jobs.JournalPath, OnEvent: server.auditJobEvent})
+	return server
 }
 
 func defaultProbePath() string {
@@ -98,7 +108,7 @@ func defaultProbePath() string {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.index)
-	mux.Handle("/v1/", s.auth(http.HandlerFunc(s.routes)))
+	mux.Handle("/v1/", s.auth(s.operationControl(http.HandlerFunc(s.routes))))
 	return s.requestID(mux)
 }
 func (s *Server) Run(ctx context.Context) error {
@@ -168,6 +178,8 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request) {
 		s.qnapProbe(w, r)
 	case "/v1/system/overview":
 		s.systemOverview(w, r)
+	case "/v1/status/snapshot":
+		s.statusSnapshot(w, r)
 	case "/v1/system/info":
 		s.systemInfo(w, r)
 	case "/v1/system/resources":
@@ -196,6 +208,10 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request) {
 		s.networkInterfaces(w, r)
 	case "/v1/network/routes":
 		s.networkRoutes(w, r)
+	case "/v1/network/ipv6/routes":
+		s.networkIPv6Routes(w, r)
+	case "/v1/network/ipv6/neighbors":
+		s.networkIPv6Neighbors(w, r)
 	case "/v1/network/dns":
 		s.networkDNS(w, r)
 	case "/v1/network/virtual-switches":
@@ -240,12 +256,20 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request) {
 		s.fileStat(w, r)
 	case "/v1/files/read":
 		s.fileRead(w, r)
+	case "/v1/files/read-text":
+		s.fileReadText(w, r)
+	case "/v1/files/read-lines":
+		s.fileReadLines(w, r)
+	case "/v1/files/grep":
+		s.fileGrep(w, r)
 	case "/v1/files/write":
 		s.fileWrite(w, r)
 	case "/v1/files/append":
 		s.fileAppend(w, r)
 	case "/v1/files/manage":
 		s.fileManage(w, r)
+	case "/v1/files/tree":
+		s.fileTree(w, r)
 	case "/v1/files/search":
 		s.fileSearch(w, r)
 	case "/v1/files/tail":
@@ -266,6 +290,12 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request) {
 		s.dockerCall(w, r, []string{"ps", "-a", "--format", "{{json .}}"}, 30)
 	case "/v1/docker/images":
 		s.dockerCall(w, r, []string{"images", "--format", "{{json .}}"}, 30)
+	case "/v1/docker/health":
+		s.dockerHealth(w, r)
+	case "/v1/docker/compose-projects":
+		s.dockerComposeProjects(w, r)
+	case "/v1/docker/reconstruct":
+		s.dockerReconstruct(w, r)
 	case "/v1/docker/command":
 		s.dockerCommand(w, r)
 	case "/v1/qnap/qpkg":
@@ -273,6 +303,10 @@ func (s *Server) routes(w http.ResponseWriter, r *http.Request) {
 	case "/v1/qnap/qpkg/manage", "/v1/qnap/qpkg/action":
 		s.qpkgManage(w, r)
 	default:
+		if strings.HasPrefix(r.URL.Path, "/v1/approvals/") {
+			s.approvalRoute(w, r)
+			return
+		}
 		if s.storageRoute(w, r) || s.userRoute(w, r) || s.shareRoute(w, r) {
 			return
 		}
@@ -299,7 +333,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r, map[string]any{"version": Version, "host": s.hostname, "uptime_s": int(time.Since(s.started).Seconds()), "profile": s.Config.Profile})
 }
 func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
-	s.ok(w, r, map[string]any{"profile": s.Config.Profile, "permissions": s.Config.Permissions, "privacy": s.Config.Privacy, "confirmation": s.Config.Confirmation, "command": s.Config.Command, "files": s.Config.Files, "jobs": s.Config.Jobs, "docker_paths": s.Config.DockerPaths})
+	s.ok(w, r, map[string]any{"profile": s.Config.Profile, "permissions": s.Config.Permissions, "privacy": s.Config.Privacy, "confirmation": s.Config.Confirmation, "approval": s.Config.Approval, "operations": s.Operations.Catalog(), "command": s.Config.Command, "files": s.Config.Files, "jobs": s.Config.Jobs, "docker_paths": s.Config.DockerPaths})
 }
 func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r, s.Discovery.Discover(r.Context()))
@@ -605,6 +639,15 @@ func (s *Server) storageRoute(w http.ResponseWriter, r *http.Request) bool {
 		}
 		return true
 	}
+	if path == "disk-io" {
+		items, err := s.Storage.DiskIO()
+		if err != nil {
+			s.fail(w, r, http.StatusServiceUnavailable, "disk_io_unavailable", err.Error(), nil)
+		} else {
+			s.ok(w, r, map[string]any{"disk_io": items})
+		}
+		return true
+	}
 	if path == "raid-groups" {
 		items, err := s.Storage.RAID()
 		if err != nil {
@@ -680,7 +723,7 @@ func (s *Server) storageRoute(w http.ResponseWriter, r *http.Request) bool {
 			if !decode(w, r, &req) {
 				return true
 			}
-			job := s.Jobs.Start("smart-test", func(ctx context.Context, log func(string)) (any, error) {
+			job, _ := s.startJob(r, "smart-test", "storage:disk:"+id, func(ctx context.Context, log func(string)) (any, error) {
 				result, err := s.Storage.StartSmart(ctx, id, req.Kind)
 				log(result.Stdout)
 				log(result.Stderr)
@@ -700,7 +743,7 @@ func (s *Server) storageRoute(w http.ResponseWriter, r *http.Request) bool {
 		if !decode(w, r, &req) {
 			return true
 		}
-		job := s.Jobs.Start("snapshot-"+req.Action, func(ctx context.Context, log func(string)) (any, error) {
+		job, _ := s.startJob(r, "snapshot-"+req.Action, "storage:snapshot", func(ctx context.Context, log func(string)) (any, error) {
 			if req.Volume != "" {
 				if req.Action != "create" {
 					return nil, errors.New("QTS snapshot adapter currently supports create only")
@@ -807,6 +850,14 @@ func (s *Server) shareRoute(w http.ResponseWriter, r *http.Request) bool {
 			s.fail(w, r, 501, "nfs_inventory_unavailable", err.Error(), nil)
 		} else {
 			s.ok(w, r, map[string]any{"exports": items})
+		}
+		return true
+	case "/v1/shares/smb-status":
+		report, err := s.Shares.SMBStatus(r.Context())
+		if err != nil {
+			s.fail(w, r, http.StatusServiceUnavailable, "smb_status_unavailable", err.Error(), nil)
+		} else {
+			s.ok(w, r, report)
 		}
 		return true
 	case "/v1/shares/manage":
@@ -987,11 +1038,14 @@ func (s *Server) fileRead(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) fileWrite(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Path          string `json:"path"`
-		ContentBase64 string `json:"content_base64"`
-		Mode          string `json:"mode"`
-		CreateParents bool   `json:"create_parents"`
-		DryRun        bool   `json:"dry_run"`
+		Path           string `json:"path"`
+		ContentBase64  string `json:"content_base64"`
+		Mode           string `json:"mode"`
+		CreateParents  bool   `json:"create_parents"`
+		ExpectedSHA256 string `json:"expected_sha256"`
+		Backup         bool   `json:"backup"`
+		BackupPath     string `json:"backup_path"`
+		DryRun         bool   `json:"dry_run"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -1014,13 +1068,13 @@ func (s *Server) fileWrite(w http.ResponseWriter, r *http.Request) {
 		s.ok(w, r, map[string]any{"path": req.Path, "bytes": len(data), "dry_run": true})
 		return
 	}
-	path, err := s.Files.Write(req.Path, data, mode, req.CreateParents)
+	result, err := s.Files.WriteAtomic(req.Path, data, files.WriteOptions{Mode: mode, CreateParents: req.CreateParents, ExpectedSHA256: req.ExpectedSHA256, Backup: req.Backup, BackupPath: req.BackupPath})
 	if err != nil {
 		s.fileErr(w, r, err)
 		return
 	}
-	s.audit(r, "file.write", "success", map[string]any{"path": path, "bytes": len(data)}, 0, "")
-	s.ok(w, r, map[string]any{"path": path, "bytes": len(data)})
+	s.audit(r, "file.write", "success", map[string]any{"path": result.Path, "bytes": len(data)}, 0, "")
+	s.ok(w, r, result)
 }
 func (s *Server) fileAppend(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -1196,7 +1250,11 @@ func (s *Server) jobListOrStart(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusBadRequest, "invalid_stdin_base64", err.Error(), nil)
 		return
 	}
-	job := s.Jobs.Start(req.Kind, func(ctx context.Context, log func(string)) (any, error) {
+	resource := "command"
+	if len(req.Command.Argv) > 0 {
+		resource += ":" + req.Command.Argv[0]
+	}
+	job, _ := s.startJob(r, req.Kind, resource, func(ctx context.Context, log func(string)) (any, error) {
 		request := (&http.Request{}).WithContext(ctx)
 		result, err := s.run(request, req.Command.Argv, qexec.Request{CWD: req.Command.CWD, Env: req.Command.Env, Stdin: stdin, Timeout: time.Duration(req.Command.TimeoutSec) * time.Second, MaxOutput: req.Command.MaxOutput, DryRun: req.Command.DryRun})
 		if result.Stdout != "" {
@@ -1270,10 +1328,6 @@ func (s *Server) dockerCommand(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, 400, "invalid_docker_subcommand", "unsupported docker subcommand", nil)
 		return
 	}
-	if docker.Destructive(req.Subcommand, req.Args) && s.Config.Confirmation.Mode != "off" {
-		s.fail(w, r, 409, "confirmation_required", "operation requires confirmation in this profile", map[string]any{"subcommand": req.Subcommand})
-		return
-	}
 	stdin, err := decodeBase64(req.StdinBase64)
 	if err != nil {
 		s.fail(w, r, 400, "invalid_stdin_base64", err.Error(), nil)
@@ -1285,7 +1339,7 @@ func (s *Server) dockerCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	args := append([]string{req.Subcommand}, req.Args...)
 	if req.Async {
-		job := s.Jobs.Start("docker."+req.Subcommand, func(ctx context.Context, log func(string)) (any, error) {
+		job, _ := s.startJob(r, "docker."+req.Subcommand, "docker", func(ctx context.Context, log func(string)) (any, error) {
 			result, err := s.Docker.RunWith(ctx, args, req.TimeoutSec, req.CWD, req.Env, stdin)
 			if result.Stdout != "" {
 				log(result.Stdout)
@@ -1322,10 +1376,6 @@ func (s *Server) qpkgManage(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	if qpkg.Destructive(req.Action) && s.Config.Confirmation.Mode != "off" {
-		s.fail(w, r, 409, "confirmation_required", "operation requires confirmation in this profile", map[string]any{"action": req.Action})
-		return
-	}
 	if _, err := qpkg.CommandArgs(req.Name, req.Action, req.Path, req.URL); err != nil && req.Action != "restart" {
 		s.fail(w, r, 400, "invalid_qpkg_action", err.Error(), nil)
 		return
@@ -1346,7 +1396,7 @@ func (s *Server) qpkgManage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Async {
-		job := s.Jobs.Start("qpkg."+req.Action, func(ctx context.Context, log func(string)) (any, error) {
+		job, _ := s.startJob(r, "qpkg."+req.Action, "qpkg:"+req.Name, func(ctx context.Context, log func(string)) (any, error) {
 			result, err := s.QPKG.Manage(ctx, req.Name, req.Action, req.Path, req.URL)
 			if result.Stdout != "" {
 				log(result.Stdout)
@@ -1488,7 +1538,7 @@ func (s *Server) ecosystemCommand(w http.ResponseWriter, r *http.Request, adapte
 	}
 	command := qexec.Request{Argv: argv, Timeout: timeout, MaxOutput: s.Config.Command.MaxOutputBytes}
 	if req.Async {
-		job := s.Jobs.Start("qnap."+adapter+"."+req.Action, func(ctx context.Context, log func(string)) (any, error) {
+		job, _ := s.startJob(r, "qnap."+adapter+"."+req.Action, "qnap:"+adapter, func(ctx context.Context, log func(string)) (any, error) {
 			result, err := s.Exec.Run(ctx, command)
 			if result.Stdout != "" {
 				log(result.Stdout)
@@ -1543,6 +1593,9 @@ func (s *Server) respondCommand(w http.ResponseWriter, r *http.Request, result q
 		if commandErr.Kind == qexec.TimedOut {
 			status = http.StatusGatewayTimeout
 		}
+		if commandErr.Kind == qexec.Cancelled {
+			status = http.StatusRequestTimeout
+		}
 		if commandErr.Kind == qexec.StartFailed {
 			status = http.StatusForbidden
 		}
@@ -1588,9 +1641,6 @@ func (s *Server) write(w http.ResponseWriter, status int, v any) {
 func (s *Server) meta(r *http.Request) meta {
 	ctx := rc(r)
 	return meta{RequestID: ctx.id, DurationMS: time.Since(ctx.started).Milliseconds()}
-}
-func (s *Server) audit(r *http.Request, action, status string, args any, duration int64, errorText string) {
-	s.Audit.Write(audit.Event{RequestID: rc(r).id, Remote: r.RemoteAddr, Tool: r.URL.Path, Action: action, Status: status, Args: args, DurationMS: duration, Error: errorText})
 }
 func decode(w http.ResponseWriter, r *http.Request, target any) bool {
 	if r.Method != http.MethodPost && r.Method != http.MethodPut && r.Method != http.MethodPatch {

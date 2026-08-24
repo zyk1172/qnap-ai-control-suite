@@ -1,0 +1,42 @@
+{
+  "Id": "reconstruct123",
+  "Name": "/web",
+  "Config": {
+    "Hostname": "web",
+    "User": "1000:1000",
+    "Tty": true,
+    "OpenStdin": true,
+    "Env": ["APP_MODE=test", "PORT=8080"],
+    "Cmd": ["--serve"],
+    "Image": "example/web:1",
+    "Volumes": {"/data": {}},
+    "WorkingDir": "/app",
+    "Entrypoint": ["/usr/local/bin/web"],
+    "Labels": {"com.example.role": "frontend"},
+    "StopSignal": "SIGTERM",
+    "StopTimeout": 10,
+    "Healthcheck": {
+      "Test": ["CMD-SHELL", "wget -q -O - http://127.0.0.1/health"],
+      "Interval": 30000000000,
+      "Timeout": 5000000000,
+      "Retries": 3,
+      "StartPeriod": 10000000000
+    },
+    "ExposedPorts": {"8080/tcp": {}}
+  },
+  "HostConfig": {
+    "Binds": ["/share/web:/data:rw"],
+    "LogConfig": {"Type": "json-file", "Config": {"max-size": "10m"}},
+    "NetworkMode": "default",
+    "PortBindings": {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "18080"}]},
+    "RestartPolicy": {"Name": "unless-stopped", "MaximumRetryCount": 0},
+    "CapAdd": ["NET_ADMIN"],
+    "Dns": ["1.1.1.1"],
+    "ReadonlyRootfs": true,
+    "ShmSize": 67108864,
+    "NanoCpus": 500000000,
+    "Memory": 268435456
+  },
+  "NetworkSettings": {"Networks": {}},
+  "Mounts": []
+}

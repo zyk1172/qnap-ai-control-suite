@@ -1,0 +1,17 @@
+[
+  {
+    "Name": "media",
+    "Status": "running(3)",
+    "ConfigFiles": "/share/Container/media/compose.yaml",
+    "WorkingDir": "/share/Container/media"
+  },
+  {
+    "name": "backup",
+    "status": "exited(1)",
+    "config_files": [
+      "/share/Container/backup/docker-compose.yml",
+      "/share/Container/backup/override.yml"
+    ],
+    "working_dir": "/share/Container/backup"
+  }
+]

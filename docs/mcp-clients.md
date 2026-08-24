@@ -23,12 +23,12 @@ Mac 上安装 Node 20+，然后在 Codex、OpenClaw 或 Hermes 中加入：
 
 如果某个智能体已经安装过本 MCP，NAS 更新后不需要改 MCP 协议配置，但需要让该智能体使用当前版本的 Mac bridge：
 
-1. 更新 Mac 上的仓库到 v1.0.16 发布分支：
+1. 更新 Mac 上的仓库到 v2.0.0 分支或发布版本：
 
    ```bash
    cd /path/to/qnap-ai-control-suite
    git fetch origin
-   git checkout release/v1.0.16-test-report-fixes
+   git checkout codex/v2-agent-native-control-plane
    git pull
    cd mac-bridge
    npm install
@@ -36,11 +36,11 @@ Mac 上安装 Node 20+，然后在 Codex、OpenClaw 或 Hermes 中加入：
 
 2. 确认该智能体的 MCP 配置仍指向同一目录下的 `mac-bridge/src/server.js` 或 `mac-bridge/src/mcp-server.js`，不要继续指向旧目录里复制出来的旧 bridge。
 
-3. 重启智能体或重启其 MCP 子进程。MCP 的 `tools/list` 在进程启动时加载，不重启不会拿到 v1.0.16 的新工具和修复。
+3. 重启智能体或重启其 MCP 子进程。MCP 的 `tools/list` 在进程启动时加载，不重启不会拿到 v2 的新工具与 toolset 设置。
 
 4. 验证顺序：
 
-   1. `nas_health`，确认返回 `"version":"1.0.16"`。
+   1. `nas_health`，确认返回 `"version":"2.0.0"`。
    2. `nas_process_list`，确认不再返回空数组。
    3. `nas_service_list`，确认返回 QNAP QPKG 服务列表。
    4. `nas_acl_get`，确认能读取 ACL 或返回 stat fallback。
@@ -56,7 +56,7 @@ Mac 上安装 Node 20+，然后在 Codex、OpenClaw 或 Hermes 中加入：
 4. `nas_docker_containers`
 5. `nas_exec`，参数 `{ "argv": ["/bin/df", "-h"] }`
 
-完整 shell pipeline 使用 `nas_shell`，例如 `{ "shell": "df -h | sort" }`。在 `full_trust` 下无需 prepare/confirm；每次调用仍写入 audit log。
+完整 shell pipeline 使用 `nas_shell`，例如 `{ "shell": "df -h | sort" }`。在 `full_trust` 下普通操作无需 prepare/confirm；敏感操作返回一次性 `approval_id`，得到文字批准后用相同参数加该 ID 重试原工具。每次调用都会写入 audit log。
 
 ## 长任务与 Job
 

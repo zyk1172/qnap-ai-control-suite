@@ -4,6 +4,7 @@ import { register, z } from "./register.js";
 const execSchema = { argv: z.array(z.string()).min(1), cwd: z.string().optional(), env: z.record(z.string(), z.string()).optional(), stdin_base64: z.string().optional(), timeout_sec: z.number().int().positive().optional(), max_output_bytes: z.number().int().positive().optional(), dry_run: z.boolean().optional() };
 export function registerSystemTools(server) {
   register(server, "nas_health", "Read agent health and active profile.", {}, () => request("GET", "/v1/health"), { readOnlyHint: true });
+  register(server, "nas_status_snapshot", "Read one best-effort NAS health snapshot with partial subsystem results.", {}, () => request("GET", "/v1/status/snapshot"), { readOnlyHint: true });
   register(server, "nas_capabilities", "Read current permissions, privacy and confirmation policy.", {}, () => request("GET", "/v1/capabilities"), { readOnlyHint: true });
   register(server, "nas_discovery", "Discover QNAP platform, utilities, QPKGs and runtime capability states.", {}, () => request("GET", "/v1/qnap/discovery"), { readOnlyHint: true });
   register(server, "nas_qnap_probe", "Run the QPKG-bundled read-only QNAP runtime probe and write JSON to an absolute NAS path. Use the output to configure private QTS adapters.", { output_path: z.string().min(1), dry_run: z.boolean().optional() }, (args) => request("POST", "/v1/qnap/probe", args), { destructiveHint: true });

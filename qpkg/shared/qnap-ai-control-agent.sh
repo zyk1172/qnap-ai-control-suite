@@ -8,27 +8,29 @@ CONFIG_DIR=/etc/config/qnap-ai-control-agent
 CONFIG="$CONFIG_DIR/config.json"
 PIDFILE=/var/run/qnap-ai-control-agent.pid
 LOGDIR=/var/log/qnap-ai-control-agent
+JOBDIR=/var/lib/qnap-ai-control-agent
 STDOUT_LOG="$LOGDIR/service.log"
 
 ensure_config() {
-  mkdir -p "$CONFIG_DIR" "$LOGDIR"
+  mkdir -p "$CONFIG_DIR" "$LOGDIR" "$JOBDIR"
+  chmod 700 "$JOBDIR"
   if [ ! -f "$CONFIG" ]; then
     TOKEN=$("$BIN" -generate-token)
     HASH=$(printf "%s" "$TOKEN" | "$BIN" -print-token-hash)
     umask 077
     cat > "$CONFIG" <<EOF
 {
-  "version": 1,
+  "version": 2,
   "listen": "0.0.0.0:8756",
   "auth": {"type": "bearer", "token_sha256": "$HASH"},
   "profile": "full_trust",
   "permissions": {"allowed_roots": ["/"], "allow_any_command": true, "allowed_commands": [], "allow_shell": true},
-  "privacy": {"redact_secrets": false},
-  "confirmation": {"mode": "off", "ttl_seconds": 600},
+  "privacy": {"redact_secrets": true},
+  "approval": {"mode": "sensitive_only", "ttl_seconds": 600},
   "command": {"timeout_seconds": 30, "max_output_bytes": 8388608},
   "files": {"max_inline_bytes": 4194304},
-  "jobs": {"max_history": 200},
-  "audit": {"enabled": true, "path": "$LOGDIR/audit.jsonl", "redact_secrets": false},
+  "jobs": {"max_history": 200, "max_concurrent": 4, "journal_path": "$JOBDIR/jobs.jsonl"},
+  "audit": {"enabled": true, "path": "$LOGDIR/audit.jsonl", "redact_secrets": true},
   "docker_paths": [
     "/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker",
     "/share/CACHEDEV1_DATA/.qpkg/container-station/usr/bin/docker",

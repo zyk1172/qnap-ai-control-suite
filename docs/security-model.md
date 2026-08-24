@@ -2,7 +2,7 @@
 
 所有 `/v1/*` 路由均要求 Bearer token，并记录 JSONL audit event。token 只保存 SHA-256 hash；首次 token 文件权限为 `0600`。
 
-`full_trust` 明确选择了完整控制，不做强制 secret redaction 或 destructive confirmation。审计默认记录完整参数。该模式仅适合物理可信或 VPN 保护的 LAN。
+`full_trust` 明确选择了完整控制：可访问 `/`、任意 argv 和 shell；它不再隐式关闭审批或日志脱敏。默认 `approval.mode=sensitive_only`，审计保留脱敏摘要。该模式仅适合物理可信或 VPN 保护的 LAN。
 
 受限 profile 可设置：
 
@@ -10,6 +10,10 @@
 - `allow_any_command`/`allowed_commands`：argv command 边界。
 - `allow_shell`：是否允许 `/bin/sh -c`。
 - `redact_secrets`：Docker 与审计隐私显示策略。
-- `confirmation.mode`：`off`、`destructive_only`、`all_write`。
+- `approval.mode`：`off`、`sensitive_only`、`all_write`，独立于权限 profile。
+
+v1 的 `confirmation` 仅为迁移兼容字段。没有 `approval` 的 v1 配置（包括 `full_trust` 的 `confirmation.mode=off`）会迁移为 `approval.mode=sensitive_only`。
+
+敏感请求返回一次性 `approval_id`，它绑定 method、path 和 canonical JSON 参数，10 分钟后过期且只能消费一次。用户以文字批准后，Agent 用完全相同参数及 `approval_id` 重试原工具；篡改、重放、过期和拒绝均会失败。
 
 无论 profile 如何，所有操作均应保留 agent audit log。不要将 token、容器环境变量、私钥或备份数据提交到 GitHub。
