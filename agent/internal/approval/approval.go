@@ -40,16 +40,17 @@ type Binding struct {
 }
 
 type Ticket struct {
-	ID        string          `json:"approval_id"`
-	RequestID string          `json:"request_id"`
-	Operation string          `json:"operation"`
-	Risk      operations.Risk `json:"risk"`
-	Target    string          `json:"target,omitempty"`
-	Summary   string          `json:"summary"`
-	State     State           `json:"state"`
-	CreatedAt time.Time       `json:"created_at"`
-	ExpiresAt time.Time       `json:"expires_at"`
-	binding   Binding
+	ID         string          `json:"approval_id"`
+	RequestID  string          `json:"request_id"`
+	Operation  string          `json:"operation"`
+	Risk       operations.Risk `json:"risk"`
+	Target     string          `json:"target,omitempty"`
+	Summary    string          `json:"summary"`
+	State      State           `json:"state"`
+	CreatedAt  time.Time       `json:"created_at"`
+	DecisionAt *time.Time      `json:"decision_at,omitempty"`
+	ExpiresAt  time.Time       `json:"expires_at"`
+	binding    Binding
 }
 
 type Options struct {
@@ -108,6 +109,20 @@ func (m *Manager) Decide(id string, approve bool) (Ticket, error) {
 		ticket.State = Approved
 	} else {
 		ticket.State = Denied
+	}
+	decisionAt := m.now()
+	ticket.DecisionAt = &decisionAt
+	return clone(*ticket), nil
+}
+
+// Lookup returns a redacted ticket snapshot for audit correlation. It never
+// changes the ticket state and does not authorize execution.
+func (m *Manager) Lookup(id string) (Ticket, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ticket, err := m.activeLocked(id)
+	if err != nil {
+		return Ticket{}, err
 	}
 	return clone(*ticket), nil
 }

@@ -19,7 +19,7 @@ func TestPendingTicketCannotBeConsumedUntilApproved(t *testing.T) {
 		t.Fatalf("pending consume error=%v, want=%v", err, ErrNotApproved)
 	}
 	approved, err := manager.Decide(ticket.ID, true)
-	if err != nil || approved.State != Approved {
+	if err != nil || approved.State != Approved || approved.DecisionAt == nil || !approved.DecisionAt.Equal(now) {
 		t.Fatalf("approval=%+v err=%v", approved, err)
 	}
 	if used, err := manager.Consume(ticket.ID, binding); err != nil || used.State != Used {

@@ -4,7 +4,7 @@ import { once } from "node:events";
 import test from "node:test";
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 
-async function listTools(env = {}) {
+async function listTools(env = {}, protocolVersion = LATEST_PROTOCOL_VERSION) {
   const child = spawn(process.execPath, ["src/server.js"], { cwd: new URL("..", import.meta.url), stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...env } });
   const lines = [];
   let buffered = "";
@@ -20,7 +20,7 @@ async function listTools(env = {}) {
     });
     child.once("error", reject);
   });
-  child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "test", version: "1" } } })}\n`);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion, capabilities: {}, clientInfo: { name: "test", version: "1" } } })}\n`);
   child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })}\n`);
   await responses;
   child.kill("SIGTERM");
@@ -28,6 +28,13 @@ async function listTools(env = {}) {
   const messages = lines.slice(0, 2).map(JSON.parse);
   return { child, messages };
 }
+
+test("negotiates supported 2025 protocol and falls back for an unknown future version", async () => {
+  const supported = await listTools({}, "2025-03-26");
+  assert.equal(supported.messages[0].result.protocolVersion, "2025-03-26");
+  const future = await listTools({}, "2026-07-28");
+  assert.equal(future.messages[0].result.protocolVersion, LATEST_PROTOCOL_VERSION);
+});
 
 test("default MCP toolset starts from a Unicode path and exposes core only", async () => {
   const { messages } = await listTools();

@@ -22,6 +22,13 @@ const (
 )
 
 type operationContextKey struct{}
+type approvalAuditContextKey struct{}
+
+type approvalAuditContext struct {
+	ID     string
+	Ticket *approval.Ticket
+	Status string
+}
 
 func (s *Server) operationControl(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -36,14 +43,22 @@ func (s *Server) operationControl(next http.Handler) http.Handler {
 			approvalID := strings.TrimSpace(r.Header.Get(approvalHeader))
 			if approvalID == "" {
 				ticket := s.Approvals.Create(rc(r).id, op, binding)
+				r = withApprovalAudit(r, approvalAuditContext{ID: ticket.ID, Ticket: &ticket, Status: "approval_requested"})
 				recorder.Header().Set(approvalHeader, ticket.ID)
 				s.fail(recorder, r, http.StatusConflict, "approval_required", "operation requires one-time approval", ticket)
 				return
 			}
-			if _, err := s.Approvals.Consume(approvalID, binding); err != nil {
+			consumed, err := s.Approvals.Consume(approvalID, binding)
+			if err != nil {
+				auditContext := approvalAuditContext{ID: approvalID, Status: approvalCode(err)}
+				if previous, lookupErr := s.Approvals.Lookup(approvalID); lookupErr == nil {
+					auditContext.Ticket = &previous
+				}
+				r = withApprovalAudit(r, auditContext)
 				s.fail(recorder, r, http.StatusConflict, approvalCode(err), err.Error(), map[string]any{"approval_id": approvalID})
 				return
 			}
+			r = withApprovalAudit(r, approvalAuditContext{ID: consumed.ID, Ticket: &consumed, Status: "approval_executed"})
 		}
 		next.ServeHTTP(recorder, r)
 	})
@@ -85,9 +100,19 @@ func (s *Server) approvalRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	ticket, err := s.Approvals.Decide(id, req.Decision == "approve")
 	if err != nil {
+		var previous *approval.Ticket
+		if current, lookupErr := s.Approvals.Lookup(id); lookupErr == nil {
+			previous = &current
+		}
+		s.auditApprovalDecision(r, id, req.Decision, approvalCode(err), previous)
 		s.fail(w, r, http.StatusConflict, approvalCode(err), err.Error(), map[string]any{"approval_id": id})
 		return
 	}
+	status := "approval_denied"
+	if req.Decision == "approve" {
+		status = "approval_approved"
+	}
+	s.auditApprovalDecision(r, id, req.Decision, status, &ticket)
 	s.ok(w, r, ticket)
 }
 
@@ -118,7 +143,38 @@ func (s *Server) auditOperation(r *http.Request, op operations.Operation, status
 	} else if status < 200 || status >= 300 {
 		result = "failed"
 	}
-	s.Audit.Write(audit.Event{RequestID: rc(r).id, Remote: r.RemoteAddr, Tool: r.URL.Path, Action: op.Name, Risk: string(op.Risk), Target: op.Target, Status: result, Args: map[string]any{"summary": op.Summary, "resource": op.Resource, "dry_run": op.DryRun}, DurationMS: time.Since(rc(r).started).Milliseconds()})
+	event := audit.Event{RequestID: rc(r).id, Remote: r.RemoteAddr, Tool: r.URL.Path, Action: op.Name, Risk: string(op.Risk), Target: op.Target, Status: result, Args: map[string]any{"summary": op.Summary, "resource": op.Resource, "dry_run": op.DryRun}, DurationMS: time.Since(rc(r).started).Milliseconds()}
+	if approvalEvent, ok := r.Context().Value(approvalAuditContextKey{}).(approvalAuditContext); ok {
+		event.ApprovalID = approvalEvent.ID
+		event.Status = approvalEvent.Status
+		if approvalEvent.Ticket != nil {
+			event.RequestID = approvalEvent.Ticket.RequestID
+			event.ApprovalCreatedAt = &approvalEvent.Ticket.CreatedAt
+			event.ApprovalDecisionAt = approvalEvent.Ticket.DecisionAt
+		}
+		if approvalEvent.Status == "approval_executed" {
+			executedAt := time.Now().UTC()
+			event.ApprovalExecutedAt = &executedAt
+		}
+	}
+	s.Audit.Write(event)
+}
+
+func (s *Server) auditApprovalDecision(r *http.Request, id, decision, status string, ticket *approval.Ticket) {
+	event := audit.Event{RequestID: rc(r).id, Remote: r.RemoteAddr, Tool: r.URL.Path, Action: "approval.decision", Status: status, ApprovalID: id, Args: map[string]any{"decision": decision}, DurationMS: time.Since(rc(r).started).Milliseconds()}
+	if ticket != nil {
+		event.RequestID = ticket.RequestID
+		event.Action = ticket.Operation
+		event.Risk = string(ticket.Risk)
+		event.Target = ticket.Target
+		event.ApprovalCreatedAt = &ticket.CreatedAt
+		event.ApprovalDecisionAt = ticket.DecisionAt
+	}
+	s.Audit.Write(event)
+}
+
+func withApprovalAudit(r *http.Request, value approvalAuditContext) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), approvalAuditContextKey{}, value))
 }
 
 func (s *Server) audit(r *http.Request, action, status string, args any, duration int64, errorText string) {

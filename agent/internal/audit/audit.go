@@ -17,18 +17,22 @@ type Logger struct {
 	mu            sync.Mutex
 }
 type Event struct {
-	TS         time.Time `json:"ts"`
-	RequestID  string    `json:"request_id,omitempty"`
-	Remote     string    `json:"remote,omitempty"`
-	Tool       string    `json:"tool,omitempty"`
-	Action     string    `json:"action,omitempty"`
-	Risk       string    `json:"risk,omitempty"`
-	Target     string    `json:"target,omitempty"`
-	JobID      string    `json:"job_id,omitempty"`
-	Status     string    `json:"status"`
-	Args       any       `json:"args,omitempty"`
-	DurationMS int64     `json:"duration_ms"`
-	Error      string    `json:"error,omitempty"`
+	TS                 time.Time  `json:"ts"`
+	RequestID          string     `json:"request_id,omitempty"`
+	Remote             string     `json:"remote,omitempty"`
+	Tool               string     `json:"tool,omitempty"`
+	Action             string     `json:"action,omitempty"`
+	Risk               string     `json:"risk,omitempty"`
+	Target             string     `json:"target,omitempty"`
+	JobID              string     `json:"job_id,omitempty"`
+	ApprovalID         string     `json:"approval_id,omitempty"`
+	ApprovalCreatedAt  *time.Time `json:"approval_created_at,omitempty"`
+	ApprovalDecisionAt *time.Time `json:"approval_decision_at,omitempty"`
+	ApprovalExecutedAt *time.Time `json:"approval_executed_at,omitempty"`
+	Status             string     `json:"status"`
+	Args               any        `json:"args,omitempty"`
+	DurationMS         int64      `json:"duration_ms"`
+	Error              string     `json:"error,omitempty"`
 }
 
 func (l *Logger) Write(event Event) {

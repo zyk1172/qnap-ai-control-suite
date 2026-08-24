@@ -56,7 +56,11 @@ Mac 上安装 Node 20+，然后在 Codex、OpenClaw 或 Hermes 中加入：
 4. `nas_docker_containers`
 5. `nas_exec`，参数 `{ "argv": ["/bin/df", "-h"] }`
 
-完整 shell pipeline 使用 `nas_shell`，例如 `{ "shell": "df -h | sort" }`。在 `full_trust` 下普通操作无需 prepare/confirm；敏感操作返回一次性 `approval_id`，得到文字批准后用相同参数加该 ID 重试原工具。每次调用都会写入 audit log。
+完整 shell pipeline 使用 `nas_shell`，例如 `{ "shell": "df -h | sort" }`。在 `full_trust` 下普通操作无需 prepare/confirm。敏感操作由 NAS 返回一次性 `approval_id` 后，MCP Bridge 会发起标准 elicitation；用户批准后 Bridge 内部记录 decision，并自动以同一 method、path、序列化 body、request ID、idempotency key 和 timeout policy 重试原始请求一次。模型不拥有批准工具；拒绝不重试，不支持 elicitation 的 client 会 fail closed。每次调用都会写入 audit log。
+
+Bridge 对 Hermes 式 `action=accept` + 空 `content` 兼容为“允许这一次”；`decline` 和 `cancel` 会记录拒绝。批准接口 `/v1/approvals/{approval_id}/decision` 是 Bridge/用户交互层的 HTTP 控制流，不会出现在 MCP tools/list 中。
+
+当前仓库固定使用已验证的 `@modelcontextprotocol/sdk@1.30.0`。它协商支持的 2025 MCP protocol versions；对尚未被该 SDK 识别的未来版本会按 SDK 行为回落到当前支持的版本，不宣称提供未验证的 2026 专属协议能力。Bridge 的审批闭环只依赖已验证的标准 form-mode elicitation。
 
 ## 长任务与 Job
 

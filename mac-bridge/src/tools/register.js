@@ -1,5 +1,6 @@
 import * as z from "zod/v4";
 import { toolResult } from "../client.js";
+import { ApprovalFlowError, handleApprovalRequired, isApprovalRequired, unsupportedApprovalMessage } from "../approval.js";
 import { toolsetEnabled } from "../config.js";
 
 export { z };
@@ -15,7 +16,19 @@ export function register(server, name, description, inputSchema, call, annotatio
     try {
       return toolResult(await call(args));
     } catch (error) {
-      if (error?.code === "approval_required" && error.details) return toolResult(error.details, true);
+      if (isApprovalRequired(error)) {
+        try {
+          return toolResult(await handleApprovalRequired({ server, error }));
+        } catch (flowError) {
+          if (flowError instanceof ApprovalFlowError || flowError?.isApprovalFlowError) {
+            return toolResult(flowError.details, true);
+          }
+          throw flowError;
+        }
+      }
+      if (error?.code === "approval_required" && error.details) {
+        return toolResult({ ...error.details, approval_status: "approval_request_unavailable", message: unsupportedApprovalMessage }, true);
+      }
       throw error;
     }
   });

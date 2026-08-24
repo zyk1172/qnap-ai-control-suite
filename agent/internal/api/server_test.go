@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"qnap-ai-control-suite/agent/internal/approval"
 	"qnap-ai-control-suite/agent/internal/config"
 	"qnap-ai-control-suite/agent/internal/jobs"
 )
@@ -391,6 +392,127 @@ func TestSensitiveDryRunRequiresApprovalThenConsumesTicket(t *testing.T) {
 	s.Handler().ServeHTTP(replayed, r)
 	if replayed.Code != http.StatusConflict || !strings.Contains(replayed.Body.String(), `"approval_used"`) {
 		t.Fatalf("replay status=%d body=%s", replayed.Code, replayed.Body.String())
+	}
+	auditData, err := os.ReadFile(s.Config.Audit.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditText := string(auditData)
+	for _, status := range []string{`"status":"approval_requested"`, `"status":"approval_not_approved"`, `"status":"approval_approved"`, `"status":"approval_executed"`, `"status":"approval_used"`} {
+		if !strings.Contains(auditText, status) || !strings.Contains(auditText, first.Error.Details.ID) {
+			t.Fatalf("audit missing %s for approval %s: %s", status, first.Error.Details.ID, auditText)
+		}
+	}
+	type approvalAuditRecord struct {
+		RequestID          string     `json:"request_id"`
+		ApprovalID         string     `json:"approval_id"`
+		Status             string     `json:"status"`
+		ApprovalCreatedAt  *time.Time `json:"approval_created_at"`
+		ApprovalDecisionAt *time.Time `json:"approval_decision_at"`
+		ApprovalExecutedAt *time.Time `json:"approval_executed_at"`
+	}
+	records := map[string]approvalAuditRecord{}
+	for _, line := range strings.Split(strings.TrimSpace(auditText), "\n") {
+		var record approvalAuditRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("invalid audit record %q: %v", line, err)
+		}
+		if record.ApprovalID == first.Error.Details.ID {
+			records[record.Status] = record
+		}
+	}
+	requestedRecord := records["approval_requested"]
+	approvedRecord := records["approval_approved"]
+	executedRecord := records["approval_executed"]
+	if requestedRecord.RequestID == "" || approvedRecord.RequestID != requestedRecord.RequestID || executedRecord.RequestID != requestedRecord.RequestID || requestedRecord.ApprovalCreatedAt == nil || approvedRecord.ApprovalDecisionAt == nil || executedRecord.ApprovalExecutedAt == nil {
+		t.Fatalf("approval audit lifecycle is not correlated: requested=%+v approved=%+v executed=%+v", requestedRecord, approvedRecord, executedRecord)
+	}
+}
+
+func TestSensitiveApprovalDecisionDenyPreventsRetry(t *testing.T) {
+	s, token := testServer(t)
+	body := `{"name":"example","action":"remove","dry_run":true}`
+	first := request(t, s, token, http.MethodPost, "/v1/qnap/qpkg/manage", body)
+	if first.Code != http.StatusConflict {
+		t.Fatalf("initial status=%d body=%s", first.Code, first.Body.String())
+	}
+	var envelope struct {
+		Error struct {
+			Details struct {
+				ID string `json:"approval_id"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &envelope); err != nil || envelope.Error.Details.ID == "" {
+		t.Fatalf("approval response=%s err=%v", first.Body.String(), err)
+	}
+	decision := request(t, s, token, http.MethodPost, "/v1/approvals/"+envelope.Error.Details.ID+"/decision", `{"decision":"deny"}`)
+	if decision.Code != http.StatusOK || !strings.Contains(decision.Body.String(), `"state":"denied"`) {
+		t.Fatalf("decision status=%d body=%s", decision.Code, decision.Body.String())
+	}
+	r := httptest.NewRequest(http.MethodPost, "/v1/qnap/qpkg/manage", strings.NewReader(body))
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set(approvalHeader, envelope.Error.Details.ID)
+	retry := httptest.NewRecorder()
+	s.Handler().ServeHTTP(retry, r)
+	if retry.Code != http.StatusConflict || !strings.Contains(retry.Body.String(), `"approval_denied"`) {
+		t.Fatalf("retry status=%d body=%s", retry.Code, retry.Body.String())
+	}
+	auditData, err := os.ReadFile(s.Config.Audit.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(auditData), `"status":"approval_denied"`) || !strings.Contains(string(auditData), envelope.Error.Details.ID) {
+		t.Fatalf("deny decision was not audited: %s", auditData)
+	}
+}
+
+func TestSensitiveApprovalRejectsModifiedRequest(t *testing.T) {
+	s, token := testServer(t)
+	initialBody := `{"name":"example","action":"remove","dry_run":true}`
+	first := request(t, s, token, http.MethodPost, "/v1/qnap/qpkg/manage", initialBody)
+	var envelope struct {
+		Error struct {
+			Details struct {
+				ID string `json:"approval_id"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if first.Code != http.StatusConflict || json.Unmarshal(first.Body.Bytes(), &envelope) != nil || envelope.Error.Details.ID == "" {
+		t.Fatalf("approval response status=%d body=%s", first.Code, first.Body.String())
+	}
+	decision := request(t, s, token, http.MethodPost, "/v1/approvals/"+envelope.Error.Details.ID+"/decision", `{"decision":"approve"}`)
+	if decision.Code != http.StatusOK {
+		t.Fatalf("decision status=%d body=%s", decision.Code, decision.Body.String())
+	}
+	modifiedBody := `{"name":"different","action":"remove","dry_run":true}`
+	r := httptest.NewRequest(http.MethodPost, "/v1/qnap/qpkg/manage", strings.NewReader(modifiedBody))
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set(approvalHeader, envelope.Error.Details.ID)
+	retry := httptest.NewRecorder()
+	s.Handler().ServeHTTP(retry, r)
+	if retry.Code != http.StatusConflict || !strings.Contains(retry.Body.String(), `"approval_mismatch"`) {
+		t.Fatalf("modified retry status=%d body=%s", retry.Code, retry.Body.String())
+	}
+}
+
+func TestSensitiveApprovalExpiresBeforeRetry(t *testing.T) {
+	s, token := testServer(t)
+	now := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+	s.Approvals = approval.NewWithOptions(approval.Options{TTL: time.Minute, Now: func() time.Time { return now }, ID: func() string { return "expired-ticket" }})
+	body := `{"name":"example","action":"remove","dry_run":true}`
+	first := request(t, s, token, http.MethodPost, "/v1/qnap/qpkg/manage", body)
+	if first.Code != http.StatusConflict {
+		t.Fatalf("initial status=%d body=%s", first.Code, first.Body.String())
+	}
+	now = now.Add(time.Minute)
+	r := httptest.NewRequest(http.MethodPost, "/v1/qnap/qpkg/manage", strings.NewReader(body))
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set(approvalHeader, "expired-ticket")
+	retry := httptest.NewRecorder()
+	s.Handler().ServeHTTP(retry, r)
+	if retry.Code != http.StatusConflict || !strings.Contains(retry.Body.String(), `"approval_expired"`) {
+		t.Fatalf("expired retry status=%d body=%s", retry.Code, retry.Body.String())
 	}
 }
 

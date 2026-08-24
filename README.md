@@ -7,7 +7,7 @@ QNAP AI Control Suite v2 是面向 Codex、OpenClaw、Hermes 与其他 MCP clien
 v2.0.0 在保留可信 LAN `full_trust` 控制能力的基础上，增加独立的 Operation Registry：权限、审批、审计、资源锁和 Job 生命周期不再由各 handler 分散处理。
 
 - `full_trust` 仅定义权限；默认 `approval.mode=sensitive_only`。读取直通，普通写入执行并审计，关机、固件、存储破坏、危险 raw command 等敏感操作返回 10 分钟、单次且绑定原请求的 `approval_id`。
-- 文字批准后，以相同参数携带 `approval_id` 重试原 MCP 工具；不依赖客户端专属弹窗。所有操作记录 request ID、风险、目标、审批/Job、状态、耗时和脱敏摘要。
+- 敏感操作由 MCP Bridge 捕获 `approval_required`，通过标准 MCP elicitation 请求用户“允许这一次/拒绝”；批准后 Bridge 记录 decision，并只自动重试一次完全相同的原始请求。模型没有批准工具；不支持交互审批的客户端会 fail closed。所有操作记录 request ID、风险、目标、审批/Job、状态、耗时和脱敏摘要。
 - Job 最多并发 4 个，支持资源锁、idempotency key、JSONL journal、重启后 `interrupted`，并以进程组 `SIGTERM` → 5 秒 → `SIGKILL` 取消子进程树。
 - MCP 默认只公开 `core`；通过 `QACS_TOOLSETS=files,docker,storage,network,qnap,admin,raw,compat` 按需启用其余工具与旧 alias。
 - 新增 `nas_status_snapshot`、文本/按行/grep 文件读取、原子写/CAS/backup/目录树同步、IPv6、进程与磁盘指标、SMB 状态、Docker health/Compose inventory。Docker reconstruction 明确报告是否无损以及缺失字段。
