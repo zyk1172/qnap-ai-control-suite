@@ -79,5 +79,5 @@ test("optional toolsets and compatibility aliases are opt-in", async () => {
   assert.ok(names.includes("nas_job_get"));
   assert.ok(names.includes("nas_system_overview"));
   assert.ok(names.includes("nas_command_run"));
-  assert.ok(names.includes("nas_approval_decide"));
+  assert.ok(!names.includes("nas_approval_decide"));
 });

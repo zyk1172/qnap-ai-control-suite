@@ -1,6 +1,6 @@
-import { baseUrl, token, requireConfiguration } from "./config.js";
+import { baseUrl, configuredHttpTimeoutMs, defaultHttpTimeoutMs, longRequestTimeoutMs, token, requireConfiguration } from "./config.js";
 
-export async function request(method, path, body) {
+export async function request(method, path, body, options = {}) {
   requireConfiguration();
   const payload = body && typeof body === "object" && !Array.isArray(body) ? { ...body } : body;
   const approvalId = payload?.approval_id;
@@ -12,12 +12,34 @@ export async function request(method, path, body) {
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
   if (approvalId) headers["X-QACS-Approval-ID"] = approvalId;
   if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
-  const response = await fetch(`${baseUrl}${path}`, {
-    method,
-    headers,
-    body: payload === undefined ? undefined : JSON.stringify(payload)
-  });
-  const responsePayload = await response.json().catch(() => ({}));
+  const timeoutMs = resolveTimeoutMs(method, path, payload, options.timeoutMs);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  let responsePayload = {};
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers,
+      body: payload === undefined ? undefined : JSON.stringify(payload),
+      signal: controller.signal
+    });
+    try {
+      responsePayload = await response.json();
+    } catch (error) {
+      if (error?.name === "AbortError") throw error;
+    }
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      const timeoutError = new Error(`QACS HTTP request timed out after ${timeoutMs} ms`);
+      timeoutError.code = "qacs_http_timeout";
+      timeoutError.timeoutMs = timeoutMs;
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!response.ok || !responsePayload.ok) {
     const error = new Error(responsePayload.error?.message || `${response.status} ${response.statusText}`);
     error.code = responsePayload.error?.code;
@@ -25,6 +47,14 @@ export async function request(method, path, body) {
     throw error;
   }
   return responsePayload.data;
+}
+
+export function resolveTimeoutMs(method, path, body, explicitTimeoutMs) {
+  const configured = configuredHttpTimeoutMs();
+  if (configured !== null) return configured;
+  if (Number.isSafeInteger(explicitTimeoutMs) && explicitTimeoutMs > 0) return Math.min(explicitTimeoutMs, 10 * 60 * 1000);
+  if (String(method).toUpperCase() === "POST" && (path === "/v1/jobs" || body?.async === true)) return longRequestTimeoutMs;
+  return defaultHttpTimeoutMs;
 }
 
 export function toolResult(data, isError = false) {

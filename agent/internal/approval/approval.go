@@ -123,10 +123,9 @@ func (m *Manager) Consume(id string, binding Binding) (Ticket, error) {
 		return Ticket{}, ErrBindingMismatch
 	}
 	switch ticket.State {
-	case Pending, Approved:
-		// The primary UX is textual approval by the client followed by an exact
-		// retry with this one-time ID. The service deliberately does not require
-		// a separate decision round trip before consuming that retry.
+	case Pending:
+		return Ticket{}, ErrNotApproved
+	case Approved:
 		ticket.State = Used
 		return clone(*ticket), nil
 	case Denied:

@@ -7,13 +7,20 @@ import (
 	"qnap-ai-control-suite/agent/internal/operations"
 )
 
-func TestTicketConsumesBoundRetryAndIsSingleUse(t *testing.T) {
+func TestPendingTicketCannotBeConsumedUntilApproved(t *testing.T) {
 	now := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
 	manager := NewWithOptions(Options{TTL: 10 * time.Minute, Now: func() time.Time { return now }, ID: func() string { return "ticket" }})
 	binding := BindingFor("POST", "/v1/system/reboot", []byte(`{"action":"reboot"}`), "system.power")
 	ticket := manager.Create("request", operations.Operation{Name: "system.power", Risk: operations.Sensitive, Target: "reboot", Summary: "sensitive reboot"}, binding)
 	if ticket.State != Pending || ticket.ID != "ticket" {
 		t.Fatalf("ticket=%+v", ticket)
+	}
+	if _, err := manager.Consume(ticket.ID, binding); err != ErrNotApproved {
+		t.Fatalf("pending consume error=%v, want=%v", err, ErrNotApproved)
+	}
+	approved, err := manager.Decide(ticket.ID, true)
+	if err != nil || approved.State != Approved {
+		t.Fatalf("approval=%+v err=%v", approved, err)
 	}
 	if used, err := manager.Consume(ticket.ID, binding); err != nil || used.State != Used {
 		t.Fatalf("consume=%+v err=%v", used, err)

@@ -1,5 +1,13 @@
 export const baseUrl = (process.env.QACS_BASE_URL || "http://NAS_IP:8756").replace(/\/$/, "");
 export const token = process.env.QACS_TOKEN || "";
+export const defaultHttpTimeoutMs = 30_000;
+export const longRequestTimeoutMs = 90_000;
+
+export function configuredHttpTimeoutMs() {
+  const value = Number(process.env.QACS_HTTP_TIMEOUT_MS);
+  if (!Number.isSafeInteger(value) || value <= 0) return null;
+  return Math.min(value, 10 * 60 * 1000);
+}
 
 const configuredToolsets = (process.env.QACS_TOOLSETS || "core").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean);
 export const toolsets = new Set(configuredToolsets.length ? configuredToolsets : ["core"]);

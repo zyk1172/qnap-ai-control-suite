@@ -362,10 +362,21 @@ func TestSensitiveDryRunRequiresApprovalThenConsumesTicket(t *testing.T) {
 	if first.OK || first.Error.Code != "approval_required" || first.Error.Details.ID == "" {
 		t.Fatalf("unexpected approval response: %s", w.Body.String())
 	}
-	// The user-facing approval happens in the client conversation. The same
-	// request carries this one-time ID on its retry; no decision endpoint is
-	// required in the main execution path.
+	// A pending ticket must not authorize execution. Approval is a user-side
+	// decision, then the original request retries with the same one-time ID.
 	r := httptest.NewRequest(http.MethodPost, "/v1/qnap/qpkg/manage", strings.NewReader(body))
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set(approvalHeader, first.Error.Details.ID)
+	pending := httptest.NewRecorder()
+	s.Handler().ServeHTTP(pending, r)
+	if pending.Code != http.StatusConflict || !strings.Contains(pending.Body.String(), `"approval_not_approved"`) {
+		t.Fatalf("pending retry status=%d body=%s", pending.Code, pending.Body.String())
+	}
+	decision := request(t, s, token, http.MethodPost, "/v1/approvals/"+first.Error.Details.ID+"/decision", `{"decision":"approve"}`)
+	if decision.Code != http.StatusOK || !strings.Contains(decision.Body.String(), `"state":"approved"`) {
+		t.Fatalf("decision status=%d body=%s", decision.Code, decision.Body.String())
+	}
+	r = httptest.NewRequest(http.MethodPost, "/v1/qnap/qpkg/manage", strings.NewReader(body))
 	r.Header.Set("Authorization", "Bearer "+token)
 	r.Header.Set(approvalHeader, first.Error.Details.ID)
 	approved := httptest.NewRecorder()
