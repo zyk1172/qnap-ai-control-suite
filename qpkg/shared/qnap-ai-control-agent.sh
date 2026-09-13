@@ -8,8 +8,45 @@ CONFIG_DIR=/etc/config/qnap-ai-control-agent
 CONFIG="$CONFIG_DIR/config.json"
 PIDFILE=/var/run/qnap-ai-control-agent.pid
 LOGDIR=/var/log/qnap-ai-control-agent
-JOBDIR=/var/lib/qnap-ai-control-agent
+JOBDIR="$CONFIG_DIR/jobs"
+LEGACY_JOBDIR=/var/lib/qnap-ai-control-agent
+JOURNAL="$JOBDIR/jobs.jsonl"
+LEGACY_JOURNAL="$LEGACY_JOBDIR/jobs.jsonl"
 STDOUT_LOG="$LOGDIR/service.log"
+
+migrate_legacy_job_state() {
+  if [ -f "$LEGACY_JOURNAL" ] && [ ! -f "$JOURNAL" ]; then
+    if ! cp -p "$LEGACY_JOURNAL" "$JOURNAL"; then
+      echo "cannot migrate legacy job journal" >&2
+      return 1
+    fi
+    chmod 600 "$JOURNAL" || return 1
+  fi
+  if [ -f "$LEGACY_JOURNAL.snapshot.json" ] && [ ! -f "$JOURNAL.snapshot.json" ]; then
+    cp -p "$LEGACY_JOURNAL.snapshot.json" "$JOURNAL.snapshot.json" || return 1
+    chmod 600 "$JOURNAL.snapshot.json" || return 1
+  fi
+  if [ -d "$LEGACY_JOURNAL.logs" ] && [ ! -d "$JOURNAL.logs" ]; then
+    mkdir -p "$JOURNAL.logs" || return 1
+    cp -R "$LEGACY_JOURNAL.logs/." "$JOURNAL.logs/" || return 1
+    chmod 700 "$JOURNAL.logs" || return 1
+    find "$JOURNAL.logs" -type f -exec chmod 600 {} \; 2>/dev/null || true
+  fi
+
+  # v2.1 generated configs used /var/lib, which is not the QTS configuration
+  # persistence area. Rewrite only that exact legacy default; custom paths are
+  # preserved. The temporary file + rename avoids exposing partial JSON.
+  if [ -f "$CONFIG" ] && grep -Fq '"journal_path": "/var/lib/qnap-ai-control-agent/jobs.jsonl"' "$CONFIG"; then
+    TMP="$CONFIG.jobs-migrate.tmp"
+    umask 077
+    if ! sed 's#"journal_path": "/var/lib/qnap-ai-control-agent/jobs.jsonl"#"journal_path": "/etc/config/qnap-ai-control-agent/jobs/jobs.jsonl"#g' "$CONFIG" > "$TMP"; then
+      rm -f "$TMP"
+      return 1
+    fi
+    chmod 600 "$TMP" || { rm -f "$TMP"; return 1; }
+    mv "$TMP" "$CONFIG" || { rm -f "$TMP"; return 1; }
+  fi
+}
 
 ensure_config() {
   if ! mkdir -p "$CONFIG_DIR" "$LOGDIR" "$JOBDIR"; then
@@ -41,7 +78,7 @@ ensure_config() {
   "approval": {"mode": "sensitive_only", "ttl_seconds": 600},
   "command": {"timeout_seconds": 30, "max_output_bytes": 8388608},
   "files": {"max_inline_bytes": 4194304},
-  "jobs": {"max_history": 200, "max_concurrent": 4, "journal_path": "$JOBDIR/jobs.jsonl"},
+  "jobs": {"max_history": 200, "max_concurrent": 4, "journal_path": "$JOURNAL"},
   "audit": {"enabled": true, "path": "$LOGDIR/audit.jsonl", "redact_secrets": true},
   "docker_paths": [
     "/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker",
@@ -79,6 +116,10 @@ EOF
       rm -f "$CONFIG" "$CONFIG_DIR/.token.install.tmp"
       return 1
     fi
+  fi
+  if ! migrate_legacy_job_state; then
+    echo "cannot migrate persistent QNAP AI Control job state" >&2
+    return 1
   fi
   if [ -f "$CONFIG" ] && ! chmod 600 "$CONFIG"; then
     echo "cannot secure agent configuration" >&2
