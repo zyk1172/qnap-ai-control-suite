@@ -63,7 +63,10 @@ jobs:
       - name: QPKG token migration contract
         run: bash scripts/qpkg_token_contract_test.sh
 
-      - name: Build Linux agent
+      - name: QPKG persistent job-state contract
+        run: bash scripts/qpkg_job_persistence_contract_test.sh
+
+      - name: Build Linux agent amd64
         env:
           GOOS: linux
           GOARCH: amd64
@@ -72,9 +75,16 @@ jobs:
           test -x dist/linux-amd64/qnap-ai-control-agent
           file dist/linux-amd64/qnap-ai-control-agent
 
-      - name: Build QPKG staging archive without QDK
+      - name: Build Linux agent arm64
         env:
-          GOARCH: amd64
+          GOOS: linux
+          GOARCH: arm64
+        run: |
+          ./scripts/build_agent.sh
+          test -x dist/linux-arm64/qnap-ai-control-agent
+          file dist/linux-arm64/qnap-ai-control-agent
+
+      - name: Build QPKG staging archives without QDK
         run: |
           set -euo pipefail
 
@@ -86,39 +96,41 @@ jobs:
               ;;
           esac
 
-          staging_dir="$RUNNER_TEMP/qnap-ai-control-qpkg-staging"
-          archive="dist/QnapAIControl-${version}-linux-${GOARCH}.qpkg-staging.tar.gz"
-          rm -rf "$staging_dir"
-          mkdir -p "$staging_dir/shared/bin" "$staging_dir/icons" dist
+          for GOARCH in amd64 arm64; do
+            staging_dir="$RUNNER_TEMP/qnap-ai-control-qpkg-staging-$GOARCH"
+            archive="dist/QnapAIControl-${version}-linux-${GOARCH}.qpkg-staging.tar.gz"
+            rm -rf "$staging_dir"
+            mkdir -p "$staging_dir/shared/bin" "$staging_dir/icons" dist
 
-          cp "dist/linux-${GOARCH}/qnap-ai-control-agent" "$staging_dir/shared/bin/"
-          cp scripts/qnap_probe.sh "$staging_dir/shared/bin/qnap-ai-control-probe"
-          sed "s/__VERSION__/${version}/g" qpkg/qpkg.cfg > "$staging_dir/qpkg.cfg"
-          cp qpkg/shared/qnap-ai-control-agent.sh "$staging_dir/shared/"
-          cp qpkg/icons/QnapAIControl* "$staging_dir/icons/"
-          : > "$staging_dir/package_routines"
-          chmod 0755 \
-            "$staging_dir/shared/bin/qnap-ai-control-agent" \
-            "$staging_dir/shared/bin/qnap-ai-control-probe" \
-            "$staging_dir/shared/qnap-ai-control-agent.sh"
+            cp "dist/linux-${GOARCH}/qnap-ai-control-agent" "$staging_dir/shared/bin/"
+            cp scripts/qnap_probe.sh "$staging_dir/shared/bin/qnap-ai-control-probe"
+            sed "s/__VERSION__/${version}/g" qpkg/qpkg.cfg > "$staging_dir/qpkg.cfg"
+            cp qpkg/shared/qnap-ai-control-agent.sh "$staging_dir/shared/"
+            cp qpkg/icons/QnapAIControl* "$staging_dir/icons/"
+            : > "$staging_dir/package_routines"
+            chmod 0755 \
+              "$staging_dir/shared/bin/qnap-ai-control-agent" \
+              "$staging_dir/shared/bin/qnap-ai-control-probe" \
+              "$staging_dir/shared/qnap-ai-control-agent.sh"
 
-          tar \
-            --sort=name \
-            --format=ustar \
-            --mtime='UTC 1970-01-01' \
-            --owner=0 \
-            --group=0 \
-            --numeric-owner \
-            --no-xattrs \
-            -C "$staging_dir" \
-            -cf - . | gzip -n > "$archive"
+            tar \
+              --sort=name \
+              --format=ustar \
+              --mtime='UTC 1970-01-01' \
+              --owner=0 \
+              --group=0 \
+              --numeric-owner \
+              --no-xattrs \
+              -C "$staging_dir" \
+              -cf - . | gzip -n > "$archive"
 
-          tar -tzf "$archive" | sort
-          tar -tzf "$archive" | grep -Fx './qpkg.cfg'
-          tar -tzf "$archive" | grep -Fx './shared/bin/qnap-ai-control-agent'
-          tar -tzf "$archive" | grep -Fx './shared/bin/qnap-ai-control-probe'
-          if tar -tzf "$archive" | grep -Eqi '(^|/)(qbuild|QDK)(/|$)'; then
-            echo "QPKG staging archive unexpectedly contains QDK material" >&2
-            exit 1
-          fi
-          sha256sum "$archive"
+            tar -tzf "$archive" | sort
+            tar -tzf "$archive" | grep -Fx './qpkg.cfg'
+            tar -tzf "$archive" | grep -Fx './shared/bin/qnap-ai-control-agent'
+            tar -tzf "$archive" | grep -Fx './shared/bin/qnap-ai-control-probe'
+            if tar -tzf "$archive" | grep -Eqi '(^|/)(qbuild|QDK)(/|$)'; then
+              echo "QPKG staging archive unexpectedly contains QDK material" >&2
+              exit 1
+            fi
+            sha256sum "$archive"
+          done
