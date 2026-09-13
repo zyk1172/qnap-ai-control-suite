@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"qnap-ai-control-suite/agent/internal/capability"
 	"qnap-ai-control-suite/agent/internal/config"
 )
 
@@ -39,6 +40,20 @@ func TestCommandExpandsOnlyKnownArgvPlaceholders(t *testing.T) {
 	_, _, err = (Service{Adapters: map[string]config.QNAPAdapter{"hbs3": {Commands: map[string][]string{"list": {"/opt/hbs", "list"}}}}}).Command("hbs3", "list", nil, []string{"--json"})
 	if err == nil || !strings.Contains(err.Error(), "does not accept args") {
 		t.Fatalf("expected rejected unused args, got %v", err)
+	}
+}
+
+func TestAdapterReportsPartialVerifiedBackend(t *testing.T) {
+	manifest := capability.Manifest{Capabilities: []capability.Capability{
+		{ID: "storage.manager.pools", Adapter: "storage_manager", Status: capability.Available, Verified: true, Backend: "qnap_cli", Provider: "/sbin/qcli_storage", Persistent: true},
+		{ID: "storage.manager.expand", Adapter: "storage_manager", Status: capability.Degraded},
+	}}
+	adapter := (Service{}).adapter("storage_manager", true, "fallback", []string{"pools", "expand"}, manifest)
+	if !adapter.Supported || !adapter.Partial || !adapter.Verified || adapter.Backend != "qnap_cli" || adapter.Provider != "/sbin/qcli_storage" {
+		t.Fatalf("unexpected adapter summary: %#v", adapter)
+	}
+	if len(adapter.CapabilityStates) != 2 {
+		t.Fatalf("expected per-action capability states, got %#v", adapter.CapabilityStates)
 	}
 }
 
