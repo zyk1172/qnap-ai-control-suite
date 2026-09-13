@@ -7,12 +7,18 @@ import { registerSystemTools } from "./tools/system.js";
 import { registerFileTools } from "./tools/files.js";
 import { registerDockerTools } from "./tools/docker.js";
 import { registerQNAPTools } from "./tools/qnap.js";
+import { registerStructuredQNAPTools } from "./tools/qnap-structured.js";
 import { registerJobTools } from "./tools/jobs.js";
 import { version } from "./version.js";
 
 export function createServer() {
   const server = new McpServer({ name: "qnap-ai-control-mcp", version }, { capabilities: { logging: {} } });
-  registerSystemTools(server); registerFileTools(server); registerDockerTools(server); registerQNAPTools(server); registerJobTools(server);
+  registerSystemTools(server);
+  registerFileTools(server);
+  registerDockerTools(server);
+  registerQNAPTools(server);
+  registerStructuredQNAPTools(server);
+  registerJobTools(server);
   return server;
 }
 export async function main() { const server = createServer(); await server.connect(new StdioServerTransport()); }
