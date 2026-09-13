@@ -44,6 +44,38 @@ func TestResolverBindsVerifiedStorageInventory(t *testing.T) {
 	}
 }
 
+func TestManualStorageAdapterDisablesAutomaticBindingForThatAdapter(t *testing.T) {
+	d := discovery.Result{Platform: "qts", Features: map[string]discovery.Feature{}, Utilities: map[string]string{}}
+	verifyCalls := 0
+	r := Resolver{
+		Adapters: map[string]config.QNAPAdapter{
+			"storage_manager": {Commands: map[string][]string{"snapshots": {"/opt/qnap/storage", "snapshots"}}},
+		},
+		FindExecutable: func(name string) string {
+			if name == "qcli_storage" {
+				return "/sbin/qcli_storage"
+			}
+			return ""
+		},
+		Verify: func(context.Context, []string) error {
+			verifyCalls++
+			return nil
+		},
+	}
+	manifest := r.ResolveResult(context.Background(), d)
+	pools, _ := manifest.Get("storage.manager.pools")
+	if pools.Status != Degraded || pools.Backend != "" {
+		t.Fatalf("explicit adapter config must suppress automatic binding: %#v", pools)
+	}
+	snapshots, _ := manifest.Get("storage.manager.snapshots")
+	if snapshots.Status != Available || snapshots.Backend != "manual_argv" {
+		t.Fatalf("configured action must remain available: %#v", snapshots)
+	}
+	if verifyCalls != 0 {
+		t.Fatalf("automatic qcli verification should not run when adapter override exists: %d", verifyCalls)
+	}
+}
+
 func TestManualAdapterOverrideWinsWithoutRuntimeProbe(t *testing.T) {
 	d := discovery.Result{Platform: "qts", Features: map[string]discovery.Feature{}, Utilities: map[string]string{}}
 	r := Resolver{Adapters: map[string]config.QNAPAdapter{
