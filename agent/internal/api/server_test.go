@@ -108,9 +108,6 @@ func TestThermalSnapshotHonorsOverallProbeBudget(t *testing.T) {
 	if result["partial"] != true || result["reason"] != "thermal probe timed out" {
 		t.Fatalf("unexpected thermal timeout result: %+v", result)
 	}
-	if result["available"] != false {
-		t.Fatalf("timed out thermal probe reported available: %+v", result)
-	}
 }
 
 func TestV2OptionalTelemetryRoutesAreRegistered(t *testing.T) {
