@@ -131,6 +131,12 @@ func (r Resolver) ResolveResult(ctx context.Context, d discovery.Result) Manifes
 }
 
 func (r Resolver) bindStorageManager(ctx context.Context, d discovery.Result, manifest *Manifest) {
+	// A configured adapter is authoritative for the whole adapter. This keeps
+	// capability reporting aligned with Service.Command, which historically
+	// rejects actions missing from an explicitly configured command map.
+	if configured := r.Adapters["storage_manager"]; len(configured.Commands) > 0 {
+		return
+	}
 	path := r.executable(d, "qcli_storage")
 	if path == "" {
 		return
