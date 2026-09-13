@@ -7,6 +7,7 @@ import (
 	"os"
 	stdexec "os/exec"
 	"path/filepath"
+	"qnap-ai-control-suite/agent/internal/capability"
 	"qnap-ai-control-suite/agent/internal/config"
 	qexec "qnap-ai-control-suite/agent/internal/exec"
 	"qnap-ai-control-suite/agent/internal/qnap/discovery"
@@ -21,11 +22,17 @@ type Service struct {
 	Adapters  map[string]config.QNAPAdapter
 }
 type Adapter struct {
-	Name         string   `json:"name"`
-	Installed    bool     `json:"installed"`
-	Supported    bool     `json:"supported"`
-	Reason       string   `json:"reason,omitempty"`
-	Capabilities []string `json:"capabilities"`
+	Name             string                  `json:"name"`
+	Installed        bool                    `json:"installed"`
+	Supported        bool                    `json:"supported"`
+	Partial          bool                    `json:"partial,omitempty"`
+	Verified         bool                    `json:"verified"`
+	Backend          string                  `json:"backend,omitempty"`
+	Provider         string                  `json:"provider,omitempty"`
+	Persistent       bool                    `json:"persistent,omitempty"`
+	Reason           string                  `json:"reason,omitempty"`
+	Capabilities     []string                `json:"capabilities"`
+	CapabilityStates []capability.Capability `json:"capability_states,omitempty"`
 }
 type Certificate struct {
 	Path        string   `json:"path"`
@@ -40,74 +47,132 @@ type Certificate struct {
 
 func (s Service) Inventory(ctx context.Context) []Adapter {
 	d := s.Discovery.Discover(ctx)
+	manifest := (capability.Resolver{Discovery: s.Discovery, Exec: s.Exec, Adapters: s.Adapters}).ResolveResult(ctx, d)
 	vmInstalled := has(d.QPKGs, "virtualization") || has(d.QPKGs, "qkvm")
 	hbsInstalled := has(d.QPKGs, "hybrid backup") || has(d.QPKGs, "hybridbackup") || has(d.QPKGs, "hbs")
 	sharesInstalled := pathExists("/etc/config/smb.conf") || pathExists("/etc/samba/smb.conf")
 	return []Adapter{
-		s.adapter("virtualization_station", vmInstalled, "QKVM/Virtualization Station detected; configure verified commands from a NAS runtime probe", []string{"list", "info", "start", "stop", "restart", "force_stop", "snapshot", "clone"}),
-		s.adapter("hbs3", hbsInstalled, "HBS package detected; configure verified commands from a NAS runtime probe", []string{"job_list", "job_status", "run", "stop", "logs"}),
-		s.adapter("iscsi", d.Features["iscsi"].Supported, "configure verified iSCSI/LUN commands from a NAS runtime probe", []string{"targets", "luns", "mapping", "status", "snapshots", "online", "offline", "expand", "clone"}),
-		s.adapter("certificates", true, "configure verified certificate commands from a NAS runtime probe", []string{"list", "current", "expiry", "issuer", "subject", "san", "import", "replace"}),
-		s.adapter("shares", sharesInstalled, "SMB/NFS configuration found; configure verified QNAP shared-folder commands from a NAS runtime probe", []string{"create", "delete", "rename", "set_path", "quota", "hidden", "recycle_bin", "nfs_export"}),
-		s.adapter("virtual_switch", d.Features["virtual_switch"].Supported, "QTS Virtual Switch private API differs by firmware; configure commands from a NAS runtime probe", []string{"list", "info", "create", "delete", "configure", "vlan", "bond", "bridge"}),
-		s.adapter("system_settings", d.Platform == "qts" || d.Platform == "quts_hero", "QTS persistent system settings require verified local commands", []string{"info", "hostname", "timezone", "ntp", "service"}),
-		s.adapter("firmware", d.Platform == "qts" || d.Platform == "quts_hero", "QTS firmware utilities require a runtime-probed command adapter", []string{"info", "check", "download", "install"}),
-		s.adapter("notifications", d.Platform == "qts" || d.Platform == "quts_hero", "QTS notification center commands require a runtime-probed command adapter", []string{"list", "history", "test", "configure"}),
-		s.adapter("storage_manager", d.Platform == "qts" || d.Platform == "quts_hero", "QTS storage manager commands require a runtime-probed command adapter", []string{"pools", "volumes", "snapshots", "create", "delete", "expand", "restore", "schedule"}),
-		{Name: "ups", Installed: d.Features["ups"].Supported, Supported: d.Features["ups"].Supported, Reason: d.Features["ups"].Reason, Capabilities: []string{"state", "battery", "runtime", "input", "configuration"}},
+		s.adapter("virtualization_station", vmInstalled, "QKVM/Virtualization Station detected; no verified backend is bound yet", []string{"list", "info", "start", "stop", "restart", "force_stop", "snapshot", "clone"}, manifest),
+		s.adapter("hbs3", hbsInstalled, "HBS package detected; no verified backend is bound yet", []string{"job_list", "job_status", "run", "stop", "logs"}, manifest),
+		s.adapter("iscsi", d.Features["iscsi"].Supported, "no verified iSCSI/LUN backend is bound", []string{"targets", "luns", "mapping", "status", "snapshots", "online", "offline", "expand", "clone"}, manifest),
+		s.adapter("certificates", true, "no verified certificate command backend is bound", []string{"list", "current", "expiry", "issuer", "subject", "san", "import", "replace"}, manifest),
+		s.adapter("shares", sharesInstalled, "SMB/NFS configuration found; no verified QNAP shared-folder command backend is bound", []string{"create", "delete", "rename", "set_path", "quota", "hidden", "recycle_bin", "nfs_export"}, manifest),
+		s.adapter("virtual_switch", d.Features["virtual_switch"].Supported, "QTS Virtual Switch private API differs by firmware; no verified backend is bound", []string{"list", "info", "create", "delete", "configure", "vlan", "bond", "bridge"}, manifest),
+		s.adapter("system_settings", d.Platform == "qts" || d.Platform == "quts_hero", "QTS persistent system settings require a verified local backend", []string{"info", "hostname", "timezone", "ntp", "service"}, manifest),
+		s.adapter("firmware", d.Platform == "qts" || d.Platform == "quts_hero", "QTS firmware utilities require a verified local backend", []string{"info", "check", "download", "install"}, manifest),
+		s.adapter("notifications", d.Platform == "qts" || d.Platform == "quts_hero", "QTS Notification Center requires a verified local backend", []string{"list", "history", "test", "configure"}, manifest),
+		s.adapter("storage_manager", d.Platform == "qts" || d.Platform == "quts_hero", "QTS Storage Manager requires verified backends for actions not covered by qcli_storage", []string{"pools", "volumes", "snapshots", "create", "delete", "expand", "restore", "schedule"}, manifest),
+		{Name: "ups", Installed: d.Features["ups"].Supported, Supported: d.Features["ups"].Supported, Verified: d.Features["ups"].Supported, Backend: "nut", Provider: d.Utilities["upsc"], Reason: d.Features["ups"].Reason, Capabilities: []string{"state", "battery", "runtime", "input", "configuration"}},
 	}
 }
 
-func (s Service) adapter(name string, installed bool, reason string, capabilities []string) Adapter {
-	configured := s.Adapters[name]
-	if len(configured.Commands) > 0 {
-		return Adapter{Name: name, Installed: true, Supported: true, Reason: "verified command adapter configured", Capabilities: sortedKeys(configured.Commands)}
-	}
-	return Adapter{Name: name, Installed: installed, Supported: false, Reason: reason, Capabilities: capabilities}
-}
-
-// Command expands one configured command without invoking a shell. A caller
-// must still enforce its active agent profile before executing the result.
-func (s Service) Command(adapter, action string, values map[string]string, args []string) ([]string, time.Duration, error) {
-	setting, ok := s.Adapters[adapter]
-	if !ok || len(setting.Commands) == 0 {
-		return nil, 0, fmt.Errorf("%s adapter has no verified command configuration; run qnap_probe and configure qnap_adapters", adapter)
-	}
-	template, ok := setting.Commands[action]
-	if !ok {
-		return nil, 0, fmt.Errorf("%s adapter does not configure action %q", adapter, action)
-	}
-	argv := make([]string, 0, len(template)+len(args))
-	usesArgs := false
-	for _, item := range template {
-		if item == "{args}" {
-			usesArgs = true
-			argv = append(argv, args...)
+func (s Service) adapter(name string, installed bool, reason string, actions []string, manifest capability.Manifest) Adapter {
+	states := manifest.ForAdapter(name)
+	available := 0
+	verified := true
+	persistent := false
+	backend := ""
+	provider := ""
+	for _, state := range states {
+		if state.Status != capability.Available {
 			continue
 		}
-		expanded := item
-		for _, key := range []string{"id", "name", "target"} {
-			placeholder := "{" + key + "}"
-			if strings.Contains(expanded, placeholder) {
-				if strings.TrimSpace(values[key]) == "" {
-					return nil, 0, fmt.Errorf("%s is required by configured %s action", key, action)
-				}
-				expanded = strings.ReplaceAll(expanded, placeholder, values[key])
+		available++
+		verified = verified && state.Verified
+		persistent = persistent || state.Persistent
+		if backend == "" {
+			backend = state.Backend
+		} else if backend != state.Backend {
+			backend = "mixed"
+		}
+		if provider == "" {
+			provider = state.Provider
+		} else if provider != state.Provider {
+			provider = "multiple"
+		}
+	}
+	if available > 0 {
+		return Adapter{
+			Name:             name,
+			Installed:        true,
+			Supported:        true,
+			Partial:          available < len(actions),
+			Verified:         verified,
+			Backend:          backend,
+			Provider:         provider,
+			Persistent:       persistent,
+			Reason:           fmt.Sprintf("%d/%d actions have verified backends", available, len(actions)),
+			Capabilities:     actions,
+			CapabilityStates: states,
+		}
+	}
+	return Adapter{Name: name, Installed: installed, Supported: false, Verified: false, Reason: reason, Capabilities: actions, CapabilityStates: states}
+}
+
+// Command expands one configured command without invoking a shell. Explicit
+// qnap_adapters overrides always win. Built-in bindings are intentionally
+// limited to commands whose argv contract is stable and read-only.
+func (s Service) Command(adapter, action string, values map[string]string, args []string) ([]string, time.Duration, error) {
+	setting, configured := s.Adapters[adapter]
+	if configured && len(setting.Commands) > 0 {
+		template, ok := setting.Commands[action]
+		if !ok {
+			return nil, 0, fmt.Errorf("%s adapter does not configure action %q", adapter, action)
+		}
+		argv := make([]string, 0, len(template)+len(args))
+		usesArgs := false
+		for _, item := range template {
+			if item == "{args}" {
+				usesArgs = true
+				argv = append(argv, args...)
+				continue
 			}
+			expanded := item
+			for _, key := range []string{"id", "name", "target"} {
+				placeholder := "{" + key + "}"
+				if strings.Contains(expanded, placeholder) {
+					if strings.TrimSpace(values[key]) == "" {
+						return nil, 0, fmt.Errorf("%s is required by configured %s action", key, action)
+					}
+					expanded = strings.ReplaceAll(expanded, placeholder, values[key])
+				}
+			}
+			if strings.Contains(expanded, "{") || strings.Contains(expanded, "}") {
+				return nil, 0, fmt.Errorf("configured %s action contains an unknown placeholder", action)
+			}
+			argv = append(argv, expanded)
 		}
-		if strings.Contains(expanded, "{") || strings.Contains(expanded, "}") {
-			return nil, 0, fmt.Errorf("configured %s action contains an unknown placeholder", action)
+		if len(args) > 0 && !usesArgs {
+			return nil, 0, fmt.Errorf("configured %s action does not accept args", action)
 		}
-		argv = append(argv, expanded)
+		if len(argv) == 0 || !filepath.IsAbs(argv[0]) {
+			return nil, 0, errors.New("configured adapter command must start with an absolute executable path")
+		}
+		timeout := time.Duration(setting.TimeoutSeconds) * time.Second
+		return argv, timeout, nil
 	}
-	if len(args) > 0 && !usesArgs {
-		return nil, 0, fmt.Errorf("configured %s action does not accept args", action)
+	if argv, timeout, ok, err := automaticCommand(adapter, action, args); ok || err != nil {
+		return argv, timeout, err
 	}
-	if len(argv) == 0 || !filepath.IsAbs(argv[0]) {
-		return nil, 0, errors.New("configured adapter command must start with an absolute executable path")
+	return nil, 0, fmt.Errorf("%s adapter has no verified backend for action %q; inspect nas_qnap_ecosystem and use nas_exec as fallback", adapter, action)
+}
+
+func automaticCommand(adapter, action string, args []string) ([]string, time.Duration, bool, error) {
+	if adapter != "storage_manager" || (action != "pools" && action != "volumes") {
+		return nil, 0, false, nil
 	}
-	timeout := time.Duration(setting.TimeoutSeconds) * time.Second
-	return argv, timeout, nil
+	if len(args) > 0 {
+		return nil, 0, true, fmt.Errorf("built-in %s action does not accept args", action)
+	}
+	path := executable("qcli_storage")
+	if path == "" {
+		return nil, 0, true, errors.New("qcli_storage executable not found")
+	}
+	flag := "-p"
+	if action == "volumes" {
+		flag = "-v"
+	}
+	return []string{path, flag}, 30 * time.Second, true, nil
 }
 
 // Certificate reads public X.509 metadata from a caller-selected certificate
@@ -192,7 +257,7 @@ func (s Service) UPS(ctx context.Context) (map[string]any, error) {
 	return map[string]any{"supported": true, "ups": ups}, nil
 }
 func (s Service) Unsupported(name string) (qexec.Result, error) {
-	return qexec.Result{}, errors.New(name + " adapter is not available; inspect nas_discovery and use nas_exec after qnap probe")
+	return qexec.Result{}, errors.New(name + " adapter is not available; inspect nas_qnap_ecosystem and use nas_exec after qnap probe")
 }
 func has(items []string, needle string) bool {
 	for _, item := range items {
