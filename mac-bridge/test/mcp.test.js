@@ -51,40 +51,36 @@ test("default MCP toolset starts from a Unicode path and exposes core only", asy
   assert.ok(!names.includes("nas_qpkg_manage"));
   assert.ok(!names.includes("nas_disks"));
   assert.ok(!names.includes("nas_qnap_ecosystem"));
-  assert.ok(!names.includes("nas_firmware_action"));
+  assert.ok(!names.includes("nas_vm_manage"));
+  assert.ok(!names.includes("nas_hbs_job_manage"));
+  assert.ok(!names.includes("nas_firmware_manage"));
   assert.ok(!names.includes("nas_system_overview"));
   assert.ok(messages[1].result.tools.every((tool) => tool.outputSchema));
 });
 
-test("optional toolsets and compatibility aliases are opt-in", async () => {
+test("optional toolsets expose typed QNAP contracts and compatibility fallbacks", async () => {
   const { messages } = await listTools({ QACS_TOOLSETS: "core,raw,files,docker,storage,network,qnap,admin,compat" });
-  const names = messages[1].result.tools.map((tool) => tool.name);
-  assert.ok(names.includes("nas_exec"));
-  assert.ok(names.includes("nas_file_read"));
-  assert.ok(names.includes("nas_file_read_text"));
-  assert.ok(names.includes("nas_file_grep"));
-  assert.ok(names.includes("nas_docker_command"));
-  assert.ok(names.includes("nas_docker_health"));
-  assert.ok(names.includes("nas_docker_compose_projects"));
-  assert.ok(names.includes("nas_qpkg_manage"));
-  assert.ok(names.includes("nas_disks"));
-  assert.ok(names.includes("nas_disk_io"));
-  assert.ok(names.includes("nas_raid_manage"));
-  assert.ok(names.includes("nas_job_start"));
-  assert.ok(names.includes("nas_qnap_probe"));
-  assert.ok(names.includes("nas_virtual_switch_action"));
-  assert.ok(names.includes("nas_system_config_action"));
-  assert.ok(names.includes("nas_firmware_action"));
-  assert.ok(names.includes("nas_notification_action"));
-  assert.ok(names.includes("nas_storage_manager_action"));
-  assert.ok(names.includes("nas_users"));
-  assert.ok(names.includes("nas_log_tail"));
-  assert.ok(names.includes("nas_network_manage"));
-  assert.ok(names.includes("nas_network_ipv6_routes"));
-  assert.ok(names.includes("nas_smb_status"));
-  assert.ok(names.includes("nas_ups"));
-  assert.ok(names.includes("nas_job_get"));
-  assert.ok(names.includes("nas_system_overview"));
-  assert.ok(names.includes("nas_command_run"));
+  const tools = messages[1].result.tools;
+  const names = tools.map((tool) => tool.name);
+  for (const name of [
+    "nas_exec", "nas_file_read", "nas_docker_command", "nas_qpkg_manage", "nas_disks", "nas_disk_io", "nas_raid_manage",
+    "nas_qnap_probe", "nas_virtual_switch_action", "nas_system_config_action", "nas_firmware_action", "nas_notification_action",
+    "nas_storage_manager_action", "nas_users", "nas_log_tail", "nas_network_manage", "nas_network_ipv6_routes", "nas_smb_status",
+    "nas_ups", "nas_job_get", "nas_system_overview", "nas_command_run",
+    "nas_vm_list", "nas_vm_info", "nas_vm_manage", "nas_hbs_jobs", "nas_hbs_job_info", "nas_hbs_job_manage", "nas_hbs_logs",
+    "nas_storage_manager_inventory", "nas_virtual_switch_manage", "nas_system_settings_manage", "nas_firmware_manage", "nas_notification_manage"
+  ]) assert.ok(names.includes(name), `missing ${name}`);
+
+  const vmManage = tools.find((tool) => tool.name === "nas_vm_manage");
+  assert.ok(vmManage.inputSchema.properties.id);
+  assert.deepEqual(vmManage.inputSchema.properties.action.enum, ["start", "stop", "restart", "force_stop", "snapshot", "clone"]);
+  assert.equal(vmManage.inputSchema.properties.args, undefined, "typed VM tool must not expose arbitrary argv");
+
+  const hbsManage = tools.find((tool) => tool.name === "nas_hbs_job_manage");
+  assert.deepEqual(hbsManage.inputSchema.properties.action.enum, ["run", "stop"]);
+  assert.equal(hbsManage.inputSchema.properties.args, undefined, "typed HBS tool must not expose arbitrary argv");
+
+  assert.ok(names.includes("nas_vm_action"), "generic VM compatibility fallback must remain");
+  assert.ok(names.includes("nas_hbs_action"), "generic HBS compatibility fallback must remain");
   assert.ok(!names.includes("nas_approval_decide"));
 });
