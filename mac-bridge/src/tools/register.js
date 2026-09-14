@@ -13,7 +13,10 @@ export function register(server, name, description, inputSchema, call, annotatio
   const toolset = annotations.toolset || toolsetFor(name);
   if (!toolsetEnabled(toolset)) return;
   const schema = annotations.readOnlyHint ? inputSchema : withControlFields(inputSchema);
-  server.registerTool(name, { description, inputSchema: schema, outputSchema: outputFor(name), annotations }, async (args) => {
+  const effectiveDescription = name === "nas_qpkg_manage"
+    ? "Manage a QPKG. For install/download/update operations, QTS qpkg_cli exit 0 may only acknowledge queue acceptance; inspect completion_verified/verification and confirm final package registration/version/process/health before treating the operation as complete."
+    : description;
+  server.registerTool(name, { description: effectiveDescription, inputSchema: schema, outputSchema: outputFor(name), annotations }, async (args) => {
     try {
       return toolResult(normalizeToolOutput(name, args, await call(args)));
     } catch (error) {
