@@ -42,7 +42,7 @@
 | 当前 NAS QACS | 2.1.2，QPKG `complete`、enabled、process running |
 | 当前 `main` | `b8c2baa878b3064f826815ca07ef8d948acfd890`，PR #8 已合并 |
 | 本地候选包 | `QnapAIControl_2.1.3.qpkg`，已复制到桌面；当前 SHA-256 前缀 `f3766e4d6cc0` |
-| 2.1.3 live 状态 | 未部署；QTS 日志只到 `code_signing_check`，health/QPKG 仍为 2.1.2 |
+| 2.1.3 live 状态 | 未部署；候选包已确认不含 QTS code-signing 区域，QTS 日志停在 `code_signing_check`，health/QPKG 仍为 2.1.2 |
 
 ### QPKG baseline
 
@@ -133,7 +133,7 @@
 | T-18 | `sleep 120` running 后 QACS-only restart | interrupted/recovered/needs_inspection，不 replay | PASS；无 orphan；没有自动执行旧意图 |
 | T-19 | Pi 用户目标：检查存储/HBS/VM/网络，不指定工具名 | Agent 先读 capability、优先 structured、必要时再 fallback | PASS WITH ISSUE；Pi 未调用 raw/write；Storage parser issue 仍可见 |
 | T-20 | Token A→B→restart→C | A 失效；B/C 生效；重启后仍有效；客户端配置同步 | PASS；只记录 hash，未输出 Token |
-| T-21 | 上传 2.1.3 QPKG，经 `nas_qpkg_manage install_file` 等待 QTS 队列 | 只有确认 QPKG version/health/process 后才能算安装完成 | BLOCKED / NOT DEPLOYED；exit 0 仅为 queue acknowledgement，日志停在 code-signing check，仍为 2.1.2 | 包和目录已删除；桌面保留最新本地包 |
+| T-21 | 上传 2.1.3 QPKG，经 `nas_qpkg_manage install_file` 等待 QTS 队列 | 只有确认 QPKG version/health/process 后才能算安装完成 | BLOCKED / NOT DEPLOYED；exit 0 仅为 queue acknowledgement；独立解析确认包没有 QDK/code-signing 区域，QTS 日志停在 code-signing check，仍为 2.1.2 | 包和目录已删除；桌面保留最新本地包 |
 | T-22 | final sanity：test root、containers、sleep processes、QACS health/QPKG | 专用资源全清理，生产状态仍稳定 | PASS；test root not found，0 test containers，0 test sleep；QACS 2.1.2 running |
 
 ## 5. Baseline Diff
@@ -144,7 +144,7 @@
 | --- | --- | --- |
 | Network | 27 interfaces、32 routes、22 IPv6 routes、7 neighbors、1 DNS server、1 search domain | 无 default gateway、DNS、IP/IPv6、MTU、VLAN、Bond、Virtual Switch 写入 |
 | Storage | 4 disks、7 RAID groups、71 volumes、0 snapshots、358 disk-IO keys | 无 RAID scrub/repair、SMART test、Pool/Volume/Snapshot 写入 |
-| QPKG | 26 个生产 QPKG 的版本/enabled/process state 未变化 | 只升级/重启 QACS 自身；2.1.3 未部署 |
+| QPKG | 26 个生产 QPKG 的版本/enabled/process state 未变化 | 只升级/重启 QACS 自身；2.1.3 因缺少签名未部署 |
 | Docker | 21 containers、5 Compose projects；production inventory 未变化 | 只创建并删除 disposable `qacs-test-*` Container，无生产 mutation |
 | Users / groups / shares | users 6、groups 3、shares 13、NFS exports 0 | 无用户、组、ACL、share、HBS、VM、firmware 修改 |
 | QACS config | canonical path、mode 0600；journal migration/job history 变化 | 允许的 QACS 自身持久化变化 |
@@ -182,6 +182,16 @@
 - Fix：本分支让 self-restart 走确定性的 scheduled acknowledgement，flush response 后延迟 250ms 再启动 QPKG restart；增加 `TestQPKGSelfRestartAcknowledgesBeforeScheduling`。该修复没有引入 Planner、Agent 或自动 replay。
 - Live boundary：2.1.3 QPKG 经过 `install_file` 后只停在 QTS code-signing check，未完成部署，因此本修复尚未有真机 live proof。
 - PR：[PR #10](https://github.com/zyk1172/qnap-ai-control-suite/pull/10)。
+
+### B3 — P1：发布 QPKG 未包含 QTS code-signing 区域，导致更新未完成
+
+- Component：QPKG 发布/签名流水线，影响 QTS 5.2.10 上的安装更新；不是 QACS runtime 操作逻辑本身。
+- Reproduction：将桌面上的 `QnapAIControl_2.1.3.qpkg` 通过 `nas_qpkg_manage install_file` 提交到 NAS。CLI 返回的是队列接受，不代表安装完成；QTS `/var/log/log.qpkg` 只出现 `qpkgd_code_signing_check`，随后 health/QPKG 仍为 2.1.2。
+- Independent evidence：对候选包做无密钥二进制结构检查，尾部为 `QNAPQPKG`，没有 `QDK` 区域，也没有 type 254 的 code-signing area；本地 `scripts/package_qpkg.sh` 只调用 `qbuild`，没有启用 `QNAP_CODE_SIGNING=1`、`--add-code-signing`，也没有注入证书/私钥/HSM。
+- Expected：正式发布给该 QTS 版本的 QPKG 应通过 QNAP 官方签名流程，或使用目标 QTS 接受的第三方 code-signing 证书/HSM 生成签名区域；发布检查应在缺少签名时 fail closed。
+- Root cause：构建产物是 unsigned QPKG；QTS 的 code-signing check 没有让它进入已安装版本，因此之前的“更新失败”根因已确认，不是 MCP 将 `exit 0` 误认为安装完成。
+- Can it be solved：技术上可以。需要 QNAP 官方签名服务/授权，或 QNAP 接受的第三方签名证书、私钥/HSM，并在受保护的 CI 发布阶段执行签名和无密钥验签。不能生成任意自签名证书来冒充已解决，也不能把签名材料写入仓库、QPKG、日志或 PR。
+- Current status：根因已确认；实际修复部署被签名授权/材料阻塞。当前 PR #10 的自重启修复因此只能报告为本地/CI 通过、真机 live deployment 未验证。
 
 ### 已验证关闭的问题
 
