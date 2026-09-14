@@ -1,4 +1,5 @@
 import { request } from "../client.js";
+import { normalizeStorageSettledResult } from "./contracts.js";
 import { register, z } from "./register.js";
 
 const asyncControls = {
@@ -29,15 +30,18 @@ export function registerStructuredQNAPTools(server) {
   }, (args) => request("POST", "/v1/qnap/hbs/action", args), qnapWrite);
   register(server, "nas_hbs_logs", "Read HBS 3 logs for a job through the verified adapter.", { id: z.string().min(1) }, ({ id }) => request("POST", "/v1/qnap/hbs/action", { action: "logs", id }), qnapRead);
 
-  register(server, "nas_storage_manager_inventory", "Read QTS Storage Manager pools and volumes through verified native or manual backends. The two reads are returned separately so partial support remains visible.", {}, async () => {
+  register(server, "nas_storage_manager_inventory", "Read QTS Storage Manager pools and volumes through verified native or manual backends. Verified qcli_storage results expose stable items[] plus parser/loss metadata while retaining raw rows for firmware-specific diagnostics; partial support remains visible.", {}, async () => {
     const results = await Promise.allSettled([
       request("POST", "/v1/qnap/storage/action", { action: "pools" }),
       request("POST", "/v1/qnap/storage/action", { action: "volumes" })
     ]);
-    const normalize = (result) => result.status === "fulfilled"
-      ? { ok: true, data: result.value }
-      : { ok: false, code: result.reason?.code || "execution_failed", message: result.reason?.message || String(result.reason) };
-    return { pools: normalize(results[0]), volumes: normalize(results[1]), partial: results.some((result) => result.status !== "fulfilled") };
+    const pools = normalizeStorageSettledResult(results[0], "pools");
+    const volumes = normalizeStorageSettledResult(results[1], "volumes");
+    return {
+      pools,
+      volumes,
+      partial: !pools.ok || !volumes.ok || pools.parse_status === "unparsed" || volumes.parse_status === "unparsed"
+    };
   }, qnapRead);
 
   register(server, "nas_virtual_switch_manage", "Create, delete, configure, or change VLAN/bond/bridge settings through the verified QTS Virtual Switch adapter. Adapter-specific argv remains available only through nas_virtual_switch_action.", {
