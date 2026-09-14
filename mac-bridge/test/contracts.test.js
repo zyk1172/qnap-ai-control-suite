@@ -69,6 +69,14 @@ test("backend failures return stable status/code/reason fields", () => {
   assert.match(normalized.reason, /no verified/i);
 });
 
+test("unsupported actions remain invalid arguments rather than backend failures", () => {
+  const error = new Error("unsupported qpkg action");
+  error.code = "bad_request";
+  const normalized = structuredToolError(error);
+  assert.equal(normalized.status, "failed");
+  assert.equal(normalized.code, "INVALID_ARGUMENT");
+});
+
 test("settled storage failures use the same structured backend error contract", () => {
   const error = new Error("backend unavailable");
   error.code = "execution_failed";
