@@ -2,6 +2,7 @@ import * as z from "zod/v4";
 import { toolResult } from "../client.js";
 import { ApprovalFlowError, handleApprovalRequired, isApprovalRequired, unsupportedApprovalMessage } from "../approval.js";
 import { toolsetEnabled } from "../config.js";
+import { normalizeToolOutput, structuredToolError } from "./contracts.js";
 
 export { z };
 export const commandResultSchema = z.object({ argv: z.array(z.string()).optional(), exit_code: z.number().int().optional(), stdout: z.string().optional(), stderr: z.string().optional(), dry_run: z.boolean().optional() }).passthrough();
@@ -14,7 +15,7 @@ export function register(server, name, description, inputSchema, call, annotatio
   const schema = annotations.readOnlyHint ? inputSchema : withControlFields(inputSchema);
   server.registerTool(name, { description, inputSchema: schema, outputSchema: outputFor(name), annotations }, async (args) => {
     try {
-      return toolResult(await call(args));
+      return toolResult(normalizeToolOutput(name, args, await call(args)));
     } catch (error) {
       if (isApprovalRequired(error)) {
         try {
@@ -23,13 +24,13 @@ export function register(server, name, description, inputSchema, call, annotatio
           if (flowError instanceof ApprovalFlowError || flowError?.isApprovalFlowError) {
             return toolResult(flowError.details, true);
           }
-          throw flowError;
+          return toolResult(structuredToolError(flowError), true);
         }
       }
       if (error?.code === "approval_required" && error.details) {
         return toolResult({ ...error.details, approval_status: "approval_request_unavailable", message: unsupportedApprovalMessage }, true);
       }
-      throw error;
+      return toolResult(structuredToolError(error), true);
     }
   });
 }
