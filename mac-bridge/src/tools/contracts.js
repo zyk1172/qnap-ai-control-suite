@@ -58,7 +58,6 @@ export function structuredToolError(error) {
 
   const output = { ok: false, status, code, reason, retriable };
   if (sourceCode) output.source_code = sourceCode;
-  if (error?.details !== undefined) output.details = error.details;
   return output;
 }
 
