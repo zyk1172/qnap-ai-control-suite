@@ -151,9 +151,11 @@ function qcliRows(stdout) {
 
 function looksLikeQCLIHeader(fields) {
   const line = fields.join(" ").toLowerCase();
+  const compact = line.replace(/[^a-z0-9]/g, "");
   return (line.includes("volume") && line.includes("name")) ||
     (line.includes("disk") && line.includes("model")) ||
-    (line.includes("pool") && line.includes("name"));
+    (line.includes("pool") && line.includes("name")) ||
+    (compact.includes("volid") && compact.includes("volname"));
 }
 
 function commandMetadata(value) {

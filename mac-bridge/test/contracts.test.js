@@ -33,6 +33,26 @@ test("parses qcli_storage volumes into typed id/name/mountpoint", () => {
   ]);
 });
 
+test("ignores qcli_storage volume headers using VolID and VolName columns", () => {
+  const stdout = `VolID   VolName                 Mount_Path\n1       DataVol1                /share/CACHEDEV1_DATA\n2       SSD                     /share/CACHEDEV5_DATA\n`;
+  assert.deepEqual(parseQCLIStorage(stdout, "volumes"), [
+    {
+      fields: ["1", "DataVol1", "/share/CACHEDEV1_DATA"],
+      raw: "1 DataVol1 /share/CACHEDEV1_DATA",
+      id: "1",
+      name: "DataVol1",
+      mountpoint: "/share/CACHEDEV1_DATA"
+    },
+    {
+      fields: ["2", "SSD", "/share/CACHEDEV5_DATA"],
+      raw: "2 SSD /share/CACHEDEV5_DATA",
+      id: "2",
+      name: "SSD",
+      mountpoint: "/share/CACHEDEV5_DATA"
+    }
+  ]);
+});
+
 test("normalizes verified qcli_storage command results into items plus loss metadata", () => {
   const result = normalizeStorageCommandResult({
     argv: ["/sbin/qcli_storage", "-v"],
