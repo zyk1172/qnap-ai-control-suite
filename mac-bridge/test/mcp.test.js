@@ -39,7 +39,7 @@ test("negotiates supported 2025 protocol and falls back for an unknown future ve
 
 test("default MCP toolset starts from a Unicode path and exposes core only", async () => {
   const { messages } = await listTools();
-  assert.equal(messages[0].result.serverInfo.version, "2.1.2");
+  assert.equal(messages[0].result.serverInfo.version, "2.1.3");
   const names = messages[1].result.tools.map((tool) => tool.name);
   assert.ok(names.includes("nas_health"));
   assert.ok(names.includes("nas_capabilities"));

@@ -349,6 +349,29 @@ func TestQPKGDryRunUsesDocumentedFlags(t *testing.T) {
 	}
 }
 
+func TestQPKGSelfRestartAcknowledgesBeforeScheduling(t *testing.T) {
+	s, token := testServer(t)
+	called := make(chan struct{})
+	s.restartQACS = func(context.Context) error {
+		close(called)
+		return nil
+	}
+	w := request(t, s, token, http.MethodPost, "/v1/qnap/qpkg/manage", `{"name":"QnapAIControl","action":"restart"}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"status":"scheduled"`) || !strings.Contains(w.Body.String(), `"completion_verified":false`) {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	select {
+	case <-called:
+		t.Fatal("self-restart was scheduled before the acknowledgement could be observed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Fatal("self-restart was not scheduled")
+	}
+}
+
 func TestQPKGAsyncQueuesAJobWithoutRunningQPKGOnRequest(t *testing.T) {
 	s, token := testServer(t)
 	// Hold the matching resource lock so this unit test proves queueing without

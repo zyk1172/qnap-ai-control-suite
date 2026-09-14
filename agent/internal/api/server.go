@@ -66,6 +66,7 @@ type Server struct {
 	hostname        string
 	tokenRotationMu sync.Mutex
 	thermalRun      func(context.Context, qexec.Request) (qexec.Result, error)
+	restartQACS     func(context.Context) error
 }
 
 // Version is injected by scripts/build_agent.sh from the repository VERSION file.
@@ -99,6 +100,10 @@ func New(cfg config.Config) *Server {
 		auditRedaction = *cfg.Audit.RedactSecrets
 	}
 	server := &Server{Config: cfg, Auth: auth.NewAuthManager(cfg.Auth.TokenSHA256), Exec: executor, Files: files.Service{Roots: cfg.Permissions.AllowedRoots, MaxInlineBytes: cfg.Files.MaxInlineBytes}, Audit: &audit.Logger{Enabled: cfg.Audit.Enabled, Path: cfg.Audit.Path, RedactSecrets: auditRedaction}, Operations: operations.New(), Approvals: approval.New(time.Duration(cfg.Approval.TTLSeconds) * time.Second), Docker: docker.Service{Exec: executor, Paths: cfg.DockerPaths, RedactSecrets: cfg.Privacy.RedactSecrets}, QPKG: qpkg.Service{Exec: executor}, Discovery: discovery.Service{Exec: executor}, System: qsystem.Service{Exec: executor}, Network: qnetwork.Service{Exec: executor}, Storage: storage.Service{Exec: executor}, Users: users.Service{Exec: executor}, Shares: shares.Service{Exec: executor}, Logs: logs.Service{AuditPath: cfg.Audit.Path, ServicePath: "/var/log/qnap-ai-control-agent/service.log", RedactSecrets: auditRedaction}, Ecosystem: ecosystem.Service{Discovery: discovery.Service{Exec: executor}, Exec: executor, Adapters: cfg.QNAPAdapters}, ProbePath: defaultProbePath(), started: time.Now(), hostname: host}
+	server.restartQACS = func(ctx context.Context) error {
+		_, err := server.QPKG.Manage(ctx, "QnapAIControl", "restart", "", "")
+		return err
+	}
 	server.Jobs = jobs.NewWithOptions(jobs.Options{MaxHistory: cfg.Jobs.MaxHistory, MaxConcurrent: cfg.Jobs.MaxConcurrent, JournalPath: cfg.Jobs.JournalPath, RedactSecrets: auditRedaction, OnEvent: server.auditJobEvent})
 	server.thermalRun = func(ctx context.Context, req qexec.Request) (qexec.Result, error) {
 		return server.Exec.Run(ctx, req)
@@ -1443,6 +1448,10 @@ func (s *Server) qpkgManage(w http.ResponseWriter, r *http.Request) {
 		s.ok(w, r, map[string]any{"argv": append([]string{"qpkg_cli"}, args...), "dry_run": true})
 		return
 	}
+	if req.Name == "QnapAIControl" && req.Action == "restart" {
+		s.scheduleQACSRestart(w, r)
+		return
+	}
 	if req.Async {
 		job, _ := s.startJob(r, "qpkg."+req.Action, "qpkg:"+req.Name, func(ctx context.Context, log func(string)) (any, error) {
 			result, err := s.QPKG.Manage(ctx, req.Name, req.Action, req.Path, req.URL)
@@ -1474,6 +1483,38 @@ func (s *Server) qpkgManage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.respondCommand(w, r, result, err)
+}
+
+func (s *Server) scheduleQACSRestart(w http.ResponseWriter, r *http.Request) {
+	s.audit(r, "qpkg.manage.restart", "scheduled", map[string]any{"name": "QnapAIControl", "action": "restart"}, 0, "")
+	s.ok(w, r, map[string]any{
+		"name":                "QnapAIControl",
+		"action":              "restart",
+		"status":              "scheduled",
+		"accepted":            true,
+		"completion_verified": false,
+		"verification": map[string]any{
+			"tool":   "nas_health",
+			"reason": "QACS must terminate the current process to restart; verify health and version after the connection is re-established.",
+		},
+	})
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	restart := s.restartQACS
+	if restart == nil {
+		restart = func(ctx context.Context) error {
+			_, err := s.QPKG.Manage(ctx, "QnapAIControl", "restart", "", "")
+			return err
+		}
+	}
+	go func() {
+		// Let net/http finish writing the acknowledgement before qpkg_cli --stop
+		// terminates this process. The QPKG service script performs the actual
+		// stop/start pair; this goroutine only initiates it after the response.
+		time.Sleep(250 * time.Millisecond)
+		_ = restart(context.Background())
+	}()
 }
 func (s *Server) auditTail(w http.ResponseWriter, r *http.Request) {
 	page, err := s.logPage(r, "audit", 200, 0, "", "", "")
