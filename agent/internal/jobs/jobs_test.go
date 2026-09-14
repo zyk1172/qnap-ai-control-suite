@@ -129,6 +129,47 @@ func TestJournalMarksUnfinishedJobsInterruptedAfterRestart(t *testing.T) {
 	waitForStatus(t, manager, job.ID, Succeeded)
 }
 
+func TestShutdownCancelsExecutorsButLeavesJobsRecoverable(t *testing.T) {
+	path := t.TempDir() + "/jobs.jsonl"
+	manager := NewWithOptions(Options{MaxHistory: 10, JournalPath: path})
+	started := make(chan struct{})
+	finished := make(chan struct{})
+	job, reused := manager.StartWithOptions(StartOptions{Kind: "shutdown"}, func(ctx context.Context, _ func(string)) (any, error) {
+		close(started)
+		<-ctx.Done()
+		close(finished)
+		return nil, ctx.Err()
+	})
+	if reused {
+		t.Fatal("first job unexpectedly reused")
+	}
+	<-started
+	waitForStatus(t, manager, job.ID, Running)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := manager.Shutdown(shutdownCtx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown returned before executor exited")
+	}
+	current, ok := manager.Get(job.ID)
+	if !ok || current.Status != Running {
+		t.Fatalf("shutdown changed recoverable job=%#v exists=%v", current, ok)
+	}
+	restarted := NewWithOptions(Options{MaxHistory: 10, JournalPath: path})
+	recovered, ok := restarted.Get(job.ID)
+	if !ok || recovered.Status != Interrupted || !recovered.Recovered || recovered.RecoveryStatus != "needs_inspection" || recovered.Retriable {
+		t.Fatalf("recovered job=%#v exists=%v", recovered, ok)
+	}
+	rejected, _ := manager.StartWithOptions(StartOptions{Kind: "after-shutdown"}, func(context.Context, func(string)) (any, error) { return nil, nil })
+	if rejected.Status != Failed || rejected.Error != "job manager is shutting down" {
+		t.Fatalf("start after shutdown=%#v", rejected)
+	}
+}
+
 func TestConcurrencyLimit(t *testing.T) {
 	m := NewWithOptions(Options{MaxHistory: 10, MaxConcurrent: 1})
 	release := make(chan struct{})

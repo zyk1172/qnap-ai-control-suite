@@ -2,7 +2,7 @@
 
 QNAP AI Control 是面向 Codex、OpenClaw、Hermes 与其他 MCP client 的 QNAP 本地控制平面。它在 NAS 上运行一个自包含的 Go agent，并在 Mac 上通过 Node MCP bridge 提供 stdio 工具。
 
-## v2.1.1
+## v2.1.2
 
 v2.1 在 v2.0 agent-native 控制面的基础上，增加了自包含的 QPKG 管理 WebUI、运行时 Token 管理和按客户端生成 MCP 配置。WebUI 不依赖 Node、CDN 或互联网资源。
 
@@ -44,7 +44,7 @@ v1 的历史能力与边界仍见 [v0.3 到 v1.0.16 对比](docs/v0.3-v1.0.15-co
 ./scripts/package_qpkg.sh amd64
 ```
 
-将 `dist/QnapAIControl_2.1.1.qpkg` 上传到 App Center 手动安装。首次启动会生成 bearer token、`full_trust` 权限和 `sensitive_only` 审批配置。打开：
+将 `dist/QnapAIControl_2.1.2.qpkg` 上传到 App Center 手动安装。首次启动会生成 bearer token、`full_trust` 权限和 `sensitive_only` 审批配置。打开：
 
 ```text
 http://NAS_IP:8756/

@@ -42,6 +42,8 @@ A Job that was `queued` or `running` when the previous process stopped is conver
 
 `retriable=false` is intentional. A generic Job manager cannot know whether a firmware write, snapshot restore, storage mutation, VM action or another side effect partially completed. QACS therefore never blindly repeats an interrupted operation. The caller should re-read the affected resource and decide whether the requested operation is already complete, should be issued again, or needs a different corrective action.
 
+When the QACS service receives a graceful stop or restart, the Job manager enters a stopping state so new Job submissions are rejected, cancels active Job contexts, and waits for their executors to terminate before the process exits. Command executors terminate the complete Unix process group (`SIGTERM`, then `SIGKILL` after the grace period). The lifecycle record is deliberately kept in its last `queued` or `running` state during this shutdown so the next process still recovers it as `interrupted`; QACS does not persist a misleading `cancelled` result and never replays the command.
+
 ## QPKG upgrade migration
 
 Older QPKG versions generated:

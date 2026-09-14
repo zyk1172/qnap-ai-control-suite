@@ -95,6 +95,8 @@ type Manager struct {
 	semaphore      chan struct{}
 	resourceLocks  map[string]chan struct{}
 	next           uint64
+	runWG          sync.WaitGroup
+	stopping       bool
 }
 
 const (
@@ -165,6 +167,13 @@ func (m *Manager) StartWithOptions(options StartOptions, fn func(context.Context
 			}
 		}
 	}
+	if m.stopping {
+		m.next++
+		now := time.Now().UTC()
+		job := Job{ID: now.Format("20060102T150405.000000000") + "-" + stringID(m.next), Kind: options.Kind, Status: Failed, CreatedAt: now, FinishedAt: &now, UpdatedAt: now, Error: "job manager is shutting down"}
+		m.mu.Unlock()
+		return job, false
+	}
 	m.next++
 	now := time.Now().UTC()
 	id := now.Format("20060102T150405.000000000") + "-" + stringID(m.next)
@@ -173,10 +182,14 @@ func (m *Manager) StartWithOptions(options StartOptions, fn func(context.Context
 	m.jobs[id] = job
 	m.trimLocked()
 	m.persistLocked(job)
+	m.runWG.Add(1)
 	snapshot := clone(*job)
 	m.mu.Unlock()
 	m.emit(Event{Job: snapshot})
-	go m.run(job, ctx, fn)
+	go func() {
+		defer m.runWG.Done()
+		m.run(job, ctx, fn)
+	}()
 	return snapshot, false
 }
 
@@ -233,6 +246,39 @@ func (m *Manager) Cancel(id string) bool {
 	return true
 }
 
+// Shutdown cancels active Job contexts and waits for their executors to exit.
+// It intentionally leaves queued/running Job records unchanged so the next
+// process can recover them as interrupted instead of recording a misleading
+// successful or cancelled result during service restart.
+func (m *Manager) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.mu.Lock()
+	m.stopping = true
+	cancels := make([]context.CancelFunc, 0)
+	for _, job := range m.jobs {
+		if !terminal(job.Status) && job.cancel != nil {
+			cancels = append(cancels, job.cancel)
+		}
+	}
+	m.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+	done := make(chan struct{})
+	go func() {
+		m.runWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (m *Manager) Logs(id string, cursor, limit int) ([]string, int, bool, bool) {
 	if cursor < 0 {
 		cursor = 0
@@ -281,6 +327,10 @@ func (m *Manager) markRunning(job *Job) {
 func (m *Manager) finish(job *Job, result any, err error, ctx context.Context) {
 	m.mu.Lock()
 	if terminal(job.Status) {
+		m.mu.Unlock()
+		return
+	}
+	if m.stopping {
 		m.mu.Unlock()
 		return
 	}

@@ -26,7 +26,7 @@ Codex 使用 TOML `[mcp_servers.qnap-ai-control]`，Hermes 使用 YAML `mcp_serv
 
 如果某个智能体已经安装过本 MCP，NAS 更新后不需要重新发现 NAS 端路由，但需要让该智能体使用当前版本的 Mac bridge：
 
-1. 更新 Mac 上的仓库到 v2.1.1 分支或发布版本：
+1. 更新 Mac 上的仓库到 v2.1.2 分支或发布版本：
 
    ```bash
    cd /path/to/qnap-ai-control-suite

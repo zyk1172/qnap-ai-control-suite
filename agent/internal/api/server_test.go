@@ -67,6 +67,47 @@ func TestAuthAndEnvelope(t *testing.T) {
 	}
 }
 
+func TestRunStopsJobExecutorsBeforeReturning(t *testing.T) {
+	s, _ := testServer(t)
+	s.Config.Listen = "127.0.0.1:0"
+	started := make(chan struct{})
+	finished := make(chan struct{})
+	job := s.Jobs.Start("shutdown", func(ctx context.Context, _ func(string)) (any, error) {
+		close(started)
+		<-ctx.Done()
+		close(finished)
+		return nil, ctx.Err()
+	})
+	waitForAPIJobStatus(t, s, job.ID, jobs.Running)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() { runDone <- s.Run(ctx) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("job did not start")
+	}
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not shut down")
+	}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("Run returned before the Job executor exited")
+	}
+	current, ok := s.Jobs.Get(job.ID)
+	if !ok || current.Status != jobs.Running {
+		t.Fatalf("Run finalized recoverable job=%#v exists=%v", current, ok)
+	}
+}
+
 func TestV2StatusSnapshotAndTextFileRoutes(t *testing.T) {
 	s, token := testServer(t)
 	w := request(t, s, token, http.MethodGet, "/v1/status/snapshot", "")

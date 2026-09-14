@@ -139,7 +139,14 @@ func (s *Server) Run(ctx context.Context) error {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		return server.Shutdown(shutdownCtx)
+		var jobsErr error
+		if s.Jobs != nil {
+			jobsErr = s.Jobs.Shutdown(shutdownCtx)
+		}
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return err
+		}
+		return jobsErr
 	}
 }
 func SignalContext() context.Context {
