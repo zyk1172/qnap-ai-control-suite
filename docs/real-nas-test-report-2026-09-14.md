@@ -181,7 +181,7 @@
 - Root cause：HTTP handler 同步调用 `QPKG.Manage`；QPKG stop 会终止正在提供 HTTP 响应的 QACS 进程。
 - Fix：本分支让 self-restart 走确定性的 scheduled acknowledgement，flush response 后延迟 250ms 再启动 QPKG restart；增加 `TestQPKGSelfRestartAcknowledgesBeforeScheduling`。该修复没有引入 Planner、Agent 或自动 replay。
 - Live boundary：2.1.3 QPKG 经过 `install_file` 后只停在 QTS code-signing check，未完成部署，因此本修复尚未有真机 live proof。
-- PR：本分支创建的后续 PR（提交后补充链接）。
+- PR：[PR #10](https://github.com/zyk1172/qnap-ai-control-suite/pull/10)。
 
 ### 已验证关闭的问题
 
@@ -263,4 +263,3 @@
 | WebUI Compatibility | PASS WITH ISSUES |
 
 最终判断：**PASS WITH ISSUES**。当前版本适合继续做受控生产只读观测、低风险 `qacs-test-*` 验证和经 approval/回滚边界保护的 QACS 自身操作；在 PR #9 的 Storage parser 修复和本 PR 的 self-restart acknowledgement 修复分别合并并在 NAS 上确认版本/health/process 后，再重新给出“控制面整改完全闭环”的结论。
-
