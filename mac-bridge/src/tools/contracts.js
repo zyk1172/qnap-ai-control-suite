@@ -24,10 +24,16 @@ export function structuredToolError(error) {
   let code = "EXECUTION_FAILED";
   let retriable = Boolean(error?.details?.retriable);
 
-  if (/no verified|backend unavailable|adapter.*(unavailable|not configured)|unsupported|not supported/.test(combined)) {
+  if (/no verified|backend unavailable|adapter.*(unavailable|not configured|no verified)|no .*backend|backend.*not supported/.test(combined)) {
     status = "unavailable";
     code = "BACKEND_UNAVAILABLE";
-  } else if (/capability.*unavailable/.test(combined)) {
+  } else if (/capability.*unavailable|capability.*not supported/.test(combined)) {
+    status = "unavailable";
+    code = "CAPABILITY_UNAVAILABLE";
+  } else if (/unsupported action|invalid|bad[_ -]?request/.test(combined)) {
+    status = "failed";
+    code = "INVALID_ARGUMENT";
+  } else if (/\bunsupported\b|not supported/.test(combined)) {
     status = "unavailable";
     code = "CAPABILITY_UNAVAILABLE";
   } else if (/not[_ -]?found|404/.test(combined)) {
@@ -44,9 +50,6 @@ export function structuredToolError(error) {
   } else if (/conflict/.test(combined)) {
     status = "blocked";
     code = "CONFLICT";
-  } else if (/invalid|bad[_ -]?request|unsupported action/.test(combined)) {
-    status = "failed";
-    code = "INVALID_ARGUMENT";
   } else if (/fetch failed|econnreset|econnrefused|socket hang up/.test(combined)) {
     status = "unknown";
     code = "EXECUTION_FAILED";
