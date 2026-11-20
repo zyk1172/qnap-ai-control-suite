@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/base64"
 	"net/http"
 	"strings"
 	"sync"
@@ -82,17 +81,12 @@ func (s *Server) fileReadText(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	result, err := s.Files.Read(req.Path, req.Offset, req.MaxBytes)
+	result, err := s.Files.ReadBytes(req.Path, req.Offset, req.MaxBytes)
 	if err != nil {
 		s.fileErr(w, r, err)
 		return
 	}
-	data, err := base64.StdEncoding.DecodeString(result.ContentBase64)
-	if err != nil {
-		s.fail(w, r, http.StatusInternalServerError, "file_decode_failed", err.Error(), nil)
-		return
-	}
-	s.ok(w, r, map[string]any{"path": result.Path, "text": string(data), "bytes": result.Bytes, "offset": result.Offset, "truncated": result.Truncated})
+	s.ok(w, r, map[string]any{"path": result.Path, "text": string(result.Data), "bytes": len(result.Data), "offset": result.Offset, "truncated": result.Truncated})
 }
 
 func (s *Server) fileReadLines(w http.ResponseWriter, r *http.Request) {
@@ -105,31 +99,12 @@ func (s *Server) fileReadLines(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.Start < 0 {
-		req.Start = 0
-	}
-	if req.Limit <= 0 || req.Limit > 2000 {
-		req.Limit = 200
-	}
-	result, err := s.Files.Read(req.Path, 0, req.MaxBytes)
+	result, err := s.fileLines.Read(r.Context(), s.Files, req.Path, req.Start, req.Limit, req.MaxBytes)
 	if err != nil {
 		s.fileErr(w, r, err)
 		return
 	}
-	data, err := base64.StdEncoding.DecodeString(result.ContentBase64)
-	if err != nil {
-		s.fail(w, r, http.StatusInternalServerError, "file_decode_failed", err.Error(), nil)
-		return
-	}
-	lines := strings.Split(string(data), "\n")
-	if req.Start > len(lines) {
-		req.Start = len(lines)
-	}
-	end := req.Start + req.Limit
-	if end > len(lines) {
-		end = len(lines)
-	}
-	s.ok(w, r, map[string]any{"path": result.Path, "start": req.Start, "next": end, "lines": lines[req.Start:end], "truncated": result.Truncated})
+	s.ok(w, r, result)
 }
 
 func (s *Server) fileGrep(w http.ResponseWriter, r *http.Request) {
@@ -146,29 +121,12 @@ func (s *Server) fileGrep(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusBadRequest, "invalid_request", "query is required", nil)
 		return
 	}
-	if req.Limit <= 0 || req.Limit > 2000 {
-		req.Limit = 200
-	}
-	result, err := s.Files.Read(req.Path, 0, req.MaxBytes)
+	result, err := s.Files.Grep(r.Context(), req.Path, req.Query, req.Limit, req.MaxBytes)
 	if err != nil {
 		s.fileErr(w, r, err)
 		return
 	}
-	data, err := base64.StdEncoding.DecodeString(result.ContentBase64)
-	if err != nil {
-		s.fail(w, r, http.StatusInternalServerError, "file_decode_failed", err.Error(), nil)
-		return
-	}
-	matches := make([]map[string]any, 0)
-	for index, line := range strings.Split(string(data), "\n") {
-		if strings.Contains(line, req.Query) {
-			matches = append(matches, map[string]any{"line": index + 1, "text": line})
-			if len(matches) == req.Limit {
-				break
-			}
-		}
-	}
-	s.ok(w, r, map[string]any{"path": result.Path, "query": req.Query, "matches": matches, "truncated": result.Truncated})
+	s.ok(w, r, result)
 }
 
 func (s *Server) fileTree(w http.ResponseWriter, r *http.Request) {

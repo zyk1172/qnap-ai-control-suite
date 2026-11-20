@@ -18,7 +18,7 @@ export function isApprovalRequired(error) {
   return error?.code === "approval_required" && Boolean(error?.details?.approval_id) && Boolean(error?.requestSpec);
 }
 
-export async function handleApprovalRequired({ server, error }) {
+export async function handleApprovalRequired({ server, error, signal }) {
   const ticket = normalizeTicket(error.details);
   if (!supportsFormElicitation(server)) {
     throw new ApprovalFlowError("approval_interaction_unavailable", unsupportedApprovalMessage, ticket);
@@ -26,7 +26,7 @@ export async function handleApprovalRequired({ server, error }) {
 
   let decision;
   try {
-    decision = await requestUserApproval(server, ticket);
+    decision = await requestUserApproval(server, ticket, signal);
   } catch (approvalError) {
     if (approvalError instanceof ApprovalFlowError) throw approvalError;
     throw new ApprovalFlowError("approval_interaction_failed", "Could not obtain explicit user approval; the operation was not executed.", ticket);
@@ -77,7 +77,7 @@ export async function handleApprovalRequired({ server, error }) {
   }
 }
 
-export async function requestUserApproval(server, ticket) {
+export async function requestUserApproval(server, ticket, signal) {
   if (!supportsFormElicitation(server)) {
     throw new ApprovalFlowError("approval_interaction_unavailable", unsupportedApprovalMessage, ticket);
   }
@@ -100,7 +100,7 @@ export async function requestUserApproval(server, ticket) {
       }
     }
   };
-  const options = { timeout, maxTotalTimeout: timeout };
+  const options = { timeout, maxTotalTimeout: timeout, signal };
   const result = isBareFormElicitation(server)
     ? await server.server.request({ method: "elicitation/create", params: { message: params.message, requestedSchema: params.requestedSchema } }, ElicitResultSchema, options)
     : await server.server.elicitInput(params, options);

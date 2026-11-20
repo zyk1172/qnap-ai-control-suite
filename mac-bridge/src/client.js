@@ -1,5 +1,13 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { baseUrl, configuredHttpTimeoutMs, defaultHttpTimeoutMs, longRequestTimeoutMs, requireConfiguration, token } from "./config.js";
+import { baseUrl, configuredHttpTimeoutMs, defaultHttpTimeoutMs, longRequestTimeoutMs, maxHttpTimeoutMs, requireConfiguration, token } from "./config.js";
+
+const requestSignal = new AsyncLocalStorage();
+
+// A tool invocation owns its initial request, approval decision, and retry.
+export function withRequestSignal(signal, run) {
+  return requestSignal.run(signal, run);
+}
 
 // A prepared request is transport-only data. It contains the exact serialized
 // body used for the first attempt, but never the bearer token. Approval retry
@@ -48,6 +56,8 @@ export async function retryRequest(requestSpec, approvalId) {
 
 async function sendPrepared(prepared) {
   requireConfiguration();
+  const callerSignal = requestSignal.getStore();
+  callerSignal?.throwIfAborted();
   const headers = {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
@@ -56,7 +66,14 @@ async function sendPrepared(prepared) {
   if (prepared.approvalId) headers["X-QACS-Approval-ID"] = prepared.approvalId;
   if (prepared.idempotencyKey) headers["Idempotency-Key"] = prepared.idempotencyKey;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), prepared.timeoutMs);
+  const cancel = () => controller.abort(callerSignal.reason);
+  callerSignal?.addEventListener("abort", cancel, { once: true });
+  const timer = setTimeout(() => {
+    const error = new Error(`QACS HTTP request timed out after ${prepared.timeoutMs} ms`);
+    error.code = "qacs_http_timeout";
+    error.timeoutMs = prepared.timeoutMs;
+    controller.abort(error);
+  }, prepared.timeoutMs);
   let response;
   let responsePayload = {};
   try {
@@ -68,19 +85,15 @@ async function sendPrepared(prepared) {
     });
     try {
       responsePayload = await response.json();
-    } catch (error) {
-      if (error?.name === "AbortError") throw error;
+    } catch {
+      controller.signal.throwIfAborted();
     }
   } catch (error) {
-    if (error?.name === "AbortError") {
-      const timeoutError = new Error(`QACS HTTP request timed out after ${prepared.timeoutMs} ms`);
-      timeoutError.code = "qacs_http_timeout";
-      timeoutError.timeoutMs = prepared.timeoutMs;
-      throw timeoutError;
-    }
+    controller.signal.throwIfAborted();
     throw error;
   } finally {
     clearTimeout(timer);
+    callerSignal?.removeEventListener("abort", cancel);
   }
   if (!response.ok || !responsePayload.ok) {
     const error = new Error(responsePayload.error?.message || `${response.status} ${response.statusText}`);
@@ -95,8 +108,14 @@ async function sendPrepared(prepared) {
 export function resolveTimeoutMs(method, path, body, explicitTimeoutMs) {
   const configured = configuredHttpTimeoutMs();
   if (configured !== null) return configured;
-  if (Number.isSafeInteger(explicitTimeoutMs) && explicitTimeoutMs > 0) return Math.min(explicitTimeoutMs, 10 * 60 * 1000);
-  if (String(method).toUpperCase() === "POST" && (path === "/v1/jobs" || body?.async === true)) return longRequestTimeoutMs;
+  if (Number.isSafeInteger(explicitTimeoutMs) && explicitTimeoutMs > 0) return Math.min(explicitTimeoutMs, maxHttpTimeoutMs);
+  if (String(method).toUpperCase() !== "POST") return defaultHttpTimeoutMs;
+  if (path === "/v1/jobs" || body?.async === true) return longRequestTimeoutMs;
+  const commandSeconds = body?.timeout_sec;
+  if (body?.dry_run !== true && Number.isSafeInteger(commandSeconds) && commandSeconds > 0) {
+    // Allow time for the agent's process cancellation and the HTTP response.
+    return Math.min(maxHttpTimeoutMs, Math.max(defaultHttpTimeoutMs, commandSeconds * 1000 + 10_000));
+  }
   return defaultHttpTimeoutMs;
 }
 

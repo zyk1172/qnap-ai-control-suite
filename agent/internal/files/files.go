@@ -167,40 +167,64 @@ func (s Service) Stat(path string) (os.FileInfo, error) {
 	return os.Stat(resolved)
 }
 func (s Service) Read(path string, offset, max int64) (ReadResult, error) {
+	result, err := s.ReadBytes(path, offset, max)
+	if err != nil {
+		return ReadResult{}, err
+	}
+	return ReadResult{Path: result.Path, ContentBase64: base64.StdEncoding.EncodeToString(result.Data), Bytes: int64(len(result.Data)), Offset: result.Offset, Truncated: result.Truncated}, nil
+}
+
+type ByteReadResult struct {
+	Path      string
+	Data      []byte
+	Offset    int64
+	Truncated bool
+}
+
+func (s Service) inlineByteLimit(max int64) int64 {
+	if max <= 0 || max > s.MaxInlineBytes {
+		return s.MaxInlineBytes
+	}
+	return max
+}
+
+func (s Service) openRead(path string) (*os.File, error) {
 	resolved, err := s.Resolve(path, false)
 	if err != nil {
-		return ReadResult{}, err
+		return nil, err
 	}
+	return os.Open(resolved)
+}
+
+func (s Service) ReadBytes(path string, offset, max int64) (ByteReadResult, error) {
 	if offset < 0 {
-		return ReadResult{}, errors.New("offset must be non-negative")
+		return ByteReadResult{}, errors.New("offset must be non-negative")
 	}
-	if max <= 0 || max > s.MaxInlineBytes {
-		max = s.MaxInlineBytes
-	}
-	f, err := os.Open(resolved)
+	f, err := s.openRead(path)
 	if err != nil {
-		return ReadResult{}, err
+		return ByteReadResult{}, err
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return ReadResult{}, err
+		return ByteReadResult{}, err
 	}
 	if offset > info.Size() {
 		offset = info.Size()
 	}
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return ReadResult{}, err
+		return ByteReadResult{}, err
 	}
+	max = s.inlineByteLimit(max)
 	b, err := io.ReadAll(io.LimitReader(f, max+1))
 	if err != nil {
-		return ReadResult{}, err
+		return ByteReadResult{}, err
 	}
 	truncated := int64(len(b)) > max
 	if truncated {
 		b = b[:max]
 	}
-	return ReadResult{Path: resolved, ContentBase64: base64.StdEncoding.EncodeToString(b), Bytes: int64(len(b)), Offset: offset, Truncated: truncated}, nil
+	return ByteReadResult{Path: f.Name(), Data: b, Offset: offset, Truncated: truncated}, nil
 }
 func (s Service) Write(path string, data []byte, mode os.FileMode, parents bool) (string, error) {
 	result, err := s.WriteAtomic(path, data, WriteOptions{Mode: mode, CreateParents: parents})
@@ -448,9 +472,7 @@ func (s Service) Tail(path string, limit int, maxBytes int64) ([]string, error) 
 	if limit > 2000 {
 		limit = 2000
 	}
-	if maxBytes <= 0 || maxBytes > s.MaxInlineBytes {
-		maxBytes = s.MaxInlineBytes
-	}
+	maxBytes = s.inlineByteLimit(maxBytes)
 	info, err := s.Stat(path)
 	if err != nil {
 		return nil, err
@@ -459,19 +481,19 @@ func (s Service) Tail(path string, limit int, maxBytes int64) ([]string, error) 
 	if offset < 0 {
 		offset = 0
 	}
-	result, err := s.Read(path, offset, maxBytes)
+	result, err := s.ReadBytes(path, offset, maxBytes)
 	if err != nil {
 		return nil, err
 	}
-	b, err := base64.StdEncoding.DecodeString(result.ContentBase64)
-	if err != nil {
-		return nil, err
+	text := strings.TrimSpace(string(result.Data))
+	start := len(text)
+	for i := 0; i < limit; i++ {
+		start = strings.LastIndexByte(text[:start], '\n')
+		if start < 0 {
+			return strings.Split(text, "\n"), nil
+		}
 	}
-	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
-	if len(lines) > limit {
-		lines = lines[len(lines)-limit:]
-	}
-	return lines, nil
+	return strings.Split(text[start+1:], "\n"), nil
 }
 func (s Service) Search(path, query string, limit int) ([]SearchResult, error) {
 	resolved, err := s.Resolve(path, false)

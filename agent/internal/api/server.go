@@ -47,6 +47,7 @@ type Server struct {
 	ConfigPath      string
 	Exec            qexec.Executor
 	Files           files.Service
+	fileLines       files.LineReader
 	Jobs            *jobs.Manager
 	Audit           *audit.Logger
 	Operations      operations.Registry
@@ -132,7 +133,7 @@ func (s *Server) Handler() http.Handler {
 	return s.requestID(mux)
 }
 func (s *Server) Run(ctx context.Context) error {
-	server := &http.Server{Addr: s.Config.Listen, Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 90 * time.Second, IdleTimeout: 120 * time.Second}
+	server := &http.Server{Addr: s.Config.Listen, Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: defaultWriteTimeout, IdleTimeout: 120 * time.Second}
 	done := make(chan error, 1)
 	go func() { done <- server.ListenAndServe() }()
 	select {
@@ -1014,6 +1015,9 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request, shell bool) {
 		}
 		stdin = decoded
 	}
+	if !req.DryRun {
+		extendCommandWriteDeadline(w, req.TimeoutSec)
+	}
 	result, err := s.run(r, req.Argv, qexec.Request{CWD: req.CWD, Env: req.Env, Stdin: stdin, Timeout: time.Duration(req.TimeoutSec) * time.Second, MaxOutput: req.MaxOutput, DryRun: req.DryRun})
 	s.respondCommand(w, r, result, err)
 }
@@ -1055,6 +1059,23 @@ func allowed(binary string, list []string) bool {
 		}
 	}
 	return false
+}
+
+const defaultWriteTimeout = 90 * time.Second
+
+// Explicit synchronous commands may require more time than the standard HTTP
+// write deadline. Leave time for process termination and response encoding.
+func extendCommandWriteDeadline(w http.ResponseWriter, timeoutSeconds int) {
+	if timeoutSeconds <= 0 {
+		return
+	}
+	const maxSeconds = 10 * 60
+	budget := time.Duration(min(timeoutSeconds, maxSeconds))*time.Second + 7*time.Second
+	if budget <= defaultWriteTimeout {
+		return
+	}
+	deadline := time.Now().Add(min(budget, maxSeconds*time.Second))
+	_ = http.NewResponseController(w).SetWriteDeadline(deadline)
 }
 func (s *Server) fileList(w http.ResponseWriter, r *http.Request) {
 	entries, err := s.Files.List(r.URL.Query().Get("path"))
@@ -1406,6 +1427,7 @@ func (s *Server) dockerCommand(w http.ResponseWriter, r *http.Request) {
 		s.ok(w, r, job)
 		return
 	}
+	extendCommandWriteDeadline(w, req.TimeoutSec)
 	result, err := s.Docker.RunWith(r.Context(), args, req.TimeoutSec, req.CWD, req.Env, stdin)
 	s.respondCommand(w, r, result, err)
 }
@@ -1641,6 +1663,7 @@ func (s *Server) ecosystemCommand(w http.ResponseWriter, r *http.Request, adapte
 		s.ok(w, r, job)
 		return
 	}
+	extendCommandWriteDeadline(w, req.TimeoutSec)
 	result, err := s.run(r, argv, command)
 	s.respondCommand(w, r, result, err)
 }
@@ -1704,6 +1727,10 @@ func commandData(result qexec.Result, err error) any {
 	return map[string]any{"result": result, "error": err.Error()}
 }
 func (s *Server) fileErr(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, files.ErrLineSeekLimit) {
+		s.fail(w, r, http.StatusBadRequest, "line_seek_limit", err.Error(), nil)
+		return
+	}
 	status := 500
 	code := "file_error"
 	if errors.Is(err, os.ErrNotExist) {

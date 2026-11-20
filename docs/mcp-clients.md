@@ -69,6 +69,8 @@ Bridge 对 Hermes 式 `action=accept` + 空 `content` 兼容为“允许这一�
 
 ## 长任务与 Job
 
+同步命令显式设置 `timeout_sec` 时，Bridge 的 HTTP 等待时间至少为 30 秒，并为命令收尾和响应留出 10 秒，最多等待 10 分钟。显式设置的 `QACS_HTTP_TIMEOUT_MS` 优先。异步 Job 的 HTTP 时间只用于等待启动响应，命令运行时间由 Job 自己的 `timeout_sec` 控制。MCP 客户端还可能有自己的调用超时。
+
 对 docker build、compose pull、备份、归档、SMART long test 或需要较长时间的 QNAP 命令，使用 `nas_job_start`，而不是让 MCP 单次调用等待到超时。
 
 argv 任务示例：
@@ -104,5 +106,9 @@ argv 任务示例：
 Job metadata 不内嵌日志；日志保存最多 1,000 条且最多 16 MiB，响应会标记 `logs_truncated`。这不影响命令本身的 stdout/stderr 结果和审计记录。
 
 `nas_log_tail` 可按 `since` / `until` 传 RFC3339 时间窗口。开启时间窗口时，无法解析时间戳的行会被排除并计数。
+
+`nas_file_read_lines` 的 `start` 是从 0 开始的行号，下一页可使用上次的 `next`。Agent 会复用未变化文件的近期续页位置。文件变化或位置不在缓存里时，Agent 最多扫描约 16 MiB 来定位，超出时返回 `line_seek_limit`。这时可从更靠前的行顺序翻页，或者用 `nas_file_read_text` 按字节偏移读取。
+
+`max_bytes` 限制每页的内容，受 Agent 的 `files.max_inline_bytes` 上限约束。如果用完该字节预算且文件还有内容，响应会设置 `truncated`。单行超过一页时会返回该行的有界前缀，`next` 指向下一行。如需完整内容，可用 `nas_file_read_text` 按字节读取。
 
 对 Virtualization Station、HBS 3、iSCSI/LUN 或证书管理，先调用 `nas_qnap_ecosystem`。只有在 NAS probe 验证并配置 `qnap_adapters` 后，才调用 `nas_vm_action`、`nas_hbs_action`、`nas_iscsi_action` 或 `nas_certificate_action`；先使用 `dry_run: true`。配置格式见 [ecosystem-adapters.md](ecosystem-adapters.md)。
