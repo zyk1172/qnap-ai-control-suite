@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { baseUrl, configuredHttpTimeoutMs, defaultHttpTimeoutMs, longRequestTimeoutMs, requireConfiguration, token } from "./config.js";
+import { baseUrl, configuredHttpTimeoutMs, defaultHttpTimeoutMs, longRequestTimeoutMs, maxHttpTimeoutMs, requireConfiguration, token } from "./config.js";
 
 // A prepared request is transport-only data. It contains the exact serialized
 // body used for the first attempt, but never the bearer token. Approval retry
@@ -95,8 +95,14 @@ async function sendPrepared(prepared) {
 export function resolveTimeoutMs(method, path, body, explicitTimeoutMs) {
   const configured = configuredHttpTimeoutMs();
   if (configured !== null) return configured;
-  if (Number.isSafeInteger(explicitTimeoutMs) && explicitTimeoutMs > 0) return Math.min(explicitTimeoutMs, 10 * 60 * 1000);
-  if (String(method).toUpperCase() === "POST" && (path === "/v1/jobs" || body?.async === true)) return longRequestTimeoutMs;
+  if (Number.isSafeInteger(explicitTimeoutMs) && explicitTimeoutMs > 0) return Math.min(explicitTimeoutMs, maxHttpTimeoutMs);
+  if (String(method).toUpperCase() !== "POST") return defaultHttpTimeoutMs;
+  if (path === "/v1/jobs" || body?.async === true) return longRequestTimeoutMs;
+  const commandSeconds = body?.timeout_sec;
+  if (body?.dry_run !== true && Number.isSafeInteger(commandSeconds) && commandSeconds > 0) {
+    // Allow time for the agent's process cancellation and the HTTP response.
+    return Math.min(maxHttpTimeoutMs, Math.max(defaultHttpTimeoutMs, commandSeconds * 1000 + 10_000));
+  }
   return defaultHttpTimeoutMs;
 }
 

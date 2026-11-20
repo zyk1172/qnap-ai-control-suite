@@ -258,6 +258,8 @@ func (w *statusRecorder) Write(data []byte) (int, error) {
 	return w.ResponseWriter.Write(data)
 }
 
+func (w *statusRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 // Flush preserves the optional http.Flusher capability of the underlying
 // net/http writer. Self-restart acknowledgements rely on this to push the JSON
 // response out before the QPKG stop sequence terminates the serving process.

@@ -22,9 +22,15 @@ test("HTTP requests use bounded defaults, long-job startup timeout, and abort", 
   const client = await import(`../src/client.js?timeout-test=${Date.now()}`);
   try {
     assert.equal(client.resolveTimeoutMs("GET", "/v1/health"), 30_000);
-    assert.equal(client.resolveTimeoutMs("POST", "/v1/jobs", {}), 90_000);
+    assert.equal(client.resolveTimeoutMs("POST", "/v1/jobs", { command: { timeout_sec: 1800 } }), 90_000);
+    assert.equal(client.prepareRequest("POST", "/v1/exec", { timeout_sec: 120 }).timeoutMs, 130_000);
+    assert.equal(client.prepareRequest("POST", "/v1/docker/command", { timeout_sec: 120, async: true }).timeoutMs, 90_000);
+    assert.equal(client.prepareRequest("POST", "/v1/exec", { timeout_sec: 120, dry_run: true }).timeoutMs, 30_000);
+    assert.equal(client.resolveTimeoutMs("POST", "/v1/exec", { timeout_sec: 5 }), 30_000);
+    assert.equal(client.resolveTimeoutMs("POST", "/v1/shell", { timeout_sec: 1200 }), 600_000);
     process.env.QACS_HTTP_TIMEOUT_MS = "20";
     assert.equal(client.resolveTimeoutMs("GET", "/v1/health"), 20);
+    assert.equal(client.prepareRequest("POST", "/v1/exec", { timeout_sec: 120 }).timeoutMs, 20);
     await assert.rejects(() => client.request("GET", "/slow"), (error) => error.code === "qacs_http_timeout" && error.timeoutMs === 20);
   } finally {
     if (previous.baseUrl === undefined) delete process.env.QACS_BASE_URL;
