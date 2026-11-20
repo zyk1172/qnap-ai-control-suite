@@ -99,7 +99,7 @@ func (s *Server) fileReadLines(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	result, err := s.Files.ReadLines(r.Context(), req.Path, req.Start, req.Limit, req.MaxBytes)
+	result, err := s.fileLines.Read(r.Context(), s.Files, req.Path, req.Start, req.Limit, req.MaxBytes)
 	if err != nil {
 		s.fileErr(w, r, err)
 		return

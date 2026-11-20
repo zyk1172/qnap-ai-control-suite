@@ -107,6 +107,8 @@ Job metadata 不内嵌日志；日志保存最多 1,000 条且最多 16 MiB，�
 
 `nas_log_tail` 可按 `since` / `until` 传 RFC3339 时间窗口。开启时间窗口时，无法解析时间戳的行会被排除并计数。
 
-`nas_file_read_lines` 的 `start` 是从 0 开始的行号，下一页可使用上次的 `next`。`max_bytes` 限制每页的内容，受 Agent 的 `files.max_inline_bytes` 上限约束。到达字节上限时会设置 `truncated`。超长行如果单独占满一页，将返回该行的有界前缀，并让 `next` 指向下一行。如需读取整行的原始内容，可用 `nas_file_read_text` 按字节读取。
+`nas_file_read_lines` 的 `start` 是从 0 开始的行号，下一页可使用上次的 `next`。Agent 会复用未变化文件的近期续页位置。文件变化或位置不在缓存里时，Agent 最多扫描约 16 MiB 来定位，超出时返回 `line_seek_limit`。这时可从更靠前的行顺序翻页，或者用 `nas_file_read_text` 按字节偏移读取。
+
+`max_bytes` 限制每页的内容，受 Agent 的 `files.max_inline_bytes` 上限约束。如果用完该字节预算且文件还有内容，响应会设置 `truncated`。单行超过一页时会返回该行的有界前缀，`next` 指向下一行。如需完整内容，可用 `nas_file_read_text` 按字节读取。
 
 对 Virtualization Station、HBS 3、iSCSI/LUN 或证书管理，先调用 `nas_qnap_ecosystem`。只有在 NAS probe 验证并配置 `qnap_adapters` 后，才调用 `nas_vm_action`、`nas_hbs_action`、`nas_iscsi_action` 或 `nas_certificate_action`；先使用 `dry_run: true`。配置格式见 [ecosystem-adapters.md](ecosystem-adapters.md)。

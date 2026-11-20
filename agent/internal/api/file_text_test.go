@@ -49,6 +49,40 @@ func TestFileReadLinesPagesAcrossByteWindows(t *testing.T) {
 	}
 }
 
+func TestFileReadLinesReportsExactByteBoundaryWhenLineLimitAlsoReached(t *testing.T) {
+	s, token := testServer(t)
+	root := t.TempDir()
+	s.Files = files.Service{Roots: []string{root}, MaxInlineBytes: 8}
+	path := filepath.Join(root, "log.txt")
+	if err := os.WriteFile(path, []byte("a\nb\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		maxBytes  int
+		start     int
+		line      string
+		truncated bool
+	}{
+		{2, 0, "a", true},
+		{2, 1, "b", false},
+		{2, 2, "", false},
+	} {
+		body, err := json.Marshal(map[string]any{"path": path, "max_bytes": tc.maxBytes, "start": tc.start, "limit": 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp := request(t, s, token, http.MethodPost, "/v1/files/read-lines", string(body))
+		var decoded struct{ Data files.LinePage }
+		if err := json.Unmarshal(resp.Body.Bytes(), &decoded); err != nil || resp.Code != 200 {
+			t.Fatalf("start=%d status=%d err=%v body=%s", tc.start, resp.Code, err, resp.Body.String())
+		}
+		page := decoded.Data
+		if page.Truncated != tc.truncated || page.Next != tc.start+1 || !reflect.DeepEqual(page.Lines, []string{tc.line}) {
+			t.Fatalf("start=%d unexpected page %+v", tc.start, page)
+		}
+	}
+}
+
 func TestFileGrepKeepsLineNumbersAcrossBuffers(t *testing.T) {
 	s, token := testServer(t)
 	root := t.TempDir()

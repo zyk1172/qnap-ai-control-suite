@@ -47,6 +47,7 @@ type Server struct {
 	ConfigPath      string
 	Exec            qexec.Executor
 	Files           files.Service
+	fileLines       files.LineReader
 	Jobs            *jobs.Manager
 	Audit           *audit.Logger
 	Operations      operations.Registry
@@ -1726,6 +1727,10 @@ func commandData(result qexec.Result, err error) any {
 	return map[string]any{"result": result, "error": err.Error()}
 }
 func (s *Server) fileErr(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, files.ErrLineSeekLimit) {
+		s.fail(w, r, http.StatusBadRequest, "line_seek_limit", err.Error(), nil)
+		return
+	}
 	status := 500
 	code := "file_error"
 	if errors.Is(err, os.ErrNotExist) {
